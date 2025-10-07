@@ -155,7 +155,7 @@ export const createInvite = async (req, res) => {
 
 export const acceptInvite = async (req, res) => {
   try {
-    const { token, firstName, lastName, password } = req.body;
+    const { token, firstName, lastName, password, twoFactorMethod } = req.body;
 
     const invite = await Invite.findOne({ token }).populate('invitedBy');
 
@@ -225,6 +225,14 @@ export const acceptInvite = async (req, res) => {
     }
 
     const user = await User.findOne({ email: invite.email }).populate('organization');
+
+    // Set user's two-factor preference: request override -> organization default -> leave null
+    const preferredTwoFactor = twoFactorMethod || user.organization?.twoFactorMethod || null;
+    if (preferredTwoFactor === 'otp' || preferredTwoFactor === 'totp') {
+      user.twoFactorMethod = preferredTwoFactor;
+      // Do not auto-enable TOTP here; user must complete setup separately
+      await user.save();
+    }
 
     invite.status = 'accepted';
     invite.acceptedAt = new Date();

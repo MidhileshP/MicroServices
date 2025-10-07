@@ -81,7 +81,6 @@ const startServer = async () => {
     if (process.env.RABBITMQ_URL) {
       try {
         await connectRabbit();
-        console.log('[rabbitmq] Connected');
       } catch (err) {
         console.warn('[rabbitmq] Failed to connect, continuing without it:', err.message);
       }
