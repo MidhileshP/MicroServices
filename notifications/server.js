@@ -98,10 +98,17 @@ const startServer = async () => {
 
     console.log('Socket.IO Redis adapter configured');
 
-    await connectRabbit();
+    if (process.env.RABBITMQ_URL) {
+      try {
+        await connectRabbit();
+        await bindConsumers();
+        console.log('[rabbitmq] Connected and consumers bound');
+      } catch (err) {
+        console.warn('[rabbitmq] Failed to connect, continuing without it:', err.message);
+      }
+    }
 
     await initMailer();
-    await bindConsumers();
 
     io.on('connection', (socket) => {
       console.log('Client connected:', socket.id);

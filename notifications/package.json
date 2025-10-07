@@ -9,24 +9,18 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@socket.io/redis-adapter": "^8.3.0",
-    "amqplib": "^0.10.9",
+    "express": "^4.18.2",
+    "socket.io": "^4.6.1",
+    "@socket.io/redis-adapter": "^8.2.1",
+    "redis": "^4.6.11",
+    "nodemailer": "^6.9.7",
+    "helmet": "^7.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2",
     "express-validator": "^7.0.1",
-    "helmet": "^7.1.0",
-    "nodemailer": "^6.9.7",
-    "rabbitmq": "^0.0.2",
-    "redis": "^4.6.11",
-    "socket.io": "^4.6.1",
-    "socket.io-redis": "^6.1.1"
+    "amqplib": "^0.10.3"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2",
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+    "nodemon": "^3.0.2"
   }
 }

@@ -4,9 +4,16 @@ let connection = null;
 let channel = null;
 
 export const connectRabbit = async () => {
-  const url = process.env.RABBITMQ_URL || 'amqp://localhost:5672';
+  const host = process.env.RABBITMQ_HOST || 'localhost';
+  const port = process.env.RABBITMQ_PORT || '5672'; // 5672 is AMQP broker port
+  const user = process.env.RABBITMQ_USER;
+  const pass = process.env.RABBITMQ_PASS;
+
+  const creds = user && pass ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : '';
+  const builtUrl = `amqp://${creds}${host}:${port}`;
+  const url = process.env.RABBITMQ_URL || builtUrl;
   try {
-    connection = await amqplib.connect(url);
+    connection = await amqplib.connect(url, { heartbeat: 30 });
     connection.on('error', (err) => console.error('[rabbitmq] connection error', err));
     connection.on('close', () => console.warn('[rabbitmq] connection closed'));
 
@@ -29,15 +36,24 @@ export const getRabbitChannel = () => {
 };
 
 export const publishEvent = async (exchange, routingKey, message) => {
-  const ch = getRabbitChannel();
-  await ch.assertExchange(exchange, 'topic', { durable: true });
-  const payload = Buffer.from(JSON.stringify(message));
-  return new Promise((resolve, reject) => {
-    ch.publish(exchange, routingKey, payload, { contentType: 'application/json', persistent: true }, (err) => {
-      if (err) return reject(err);
-      resolve(true);
+  if (!channel) {
+    console.warn('[rabbitmq] Channel not initialized, skipping event publish');
+    return false;
+  }
+
+  try {
+    await channel.assertExchange(exchange, 'topic', { durable: true });
+    const payload = Buffer.from(JSON.stringify(message));
+    return new Promise((resolve, reject) => {
+      channel.publish(exchange, routingKey, payload, { contentType: 'application/json', persistent: true }, (err) => {
+        if (err) return reject(err);
+        resolve(true);
+      });
     });
-  });
+  } catch (error) {
+    console.error('[rabbitmq] Publish failed:', error.message);
+    throw error;
+  }
 };
 
 export const disconnectRabbit = async () => {

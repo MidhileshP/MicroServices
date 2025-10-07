@@ -11,6 +11,7 @@ import { emitInviteAccepted } from '../utils/socketClient.js';
 export const createInvite = async (req, res) => {
   try {
     const { email, role, organizationName } = req.body;
+    const normalizedEmail = (email || '').trim().toLowerCase();
     const inviter = req.user;
 
     if (!canInviteRole(inviter.role, role)) {
@@ -20,7 +21,7 @@ export const createInvite = async (req, res) => {
       });
     }
 
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -28,15 +29,50 @@ export const createInvite = async (req, res) => {
       });
     }
 
-    const pendingInvite = await Invite.findOne({
-      email,
-      status: 'pending'
-    });
+    const pendingInvite = await Invite.findOne({ email: normalizedEmail, status: 'pending' });
 
-    if (pendingInvite && !pendingInvite.isExpired()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Active invite already exists for this email'
+    if (pendingInvite) {
+      // If expired, refresh token and expiry; otherwise, resend existing invite
+      if (pendingInvite.isExpired()) {
+        const newToken = Invite.generateToken();
+        pendingInvite.token = newToken;
+        pendingInvite.expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        pendingInvite.status = 'pending';
+        await pendingInvite.save();
+
+        const inviterName = `${inviter.firstName} ${inviter.lastName}`;
+        await sendInviteEmail(normalizedEmail, newToken, inviterName, role);
+        await publishEvent(
+          process.env.RABBITMQ_EXCHANGE || 'events',
+          process.env.RABBITMQ_ROUTE_INVITE || 'user.invite.created',
+          {
+            to: normalizedEmail,
+            subject: 'You have been invited',
+            html: `You have been invited by ${inviterName}. Use token: ${newToken}`
+          }
+        );
+
+        return res.status(200).json({
+          success: true,
+          message: 'Existing expired invite refreshed and re-sent'
+        });
+      }
+
+      const inviterName = `${inviter.firstName} ${inviter.lastName}`;
+      await sendInviteEmail(normalizedEmail, pendingInvite.token, inviterName, role);
+      await publishEvent(
+        process.env.RABBITMQ_EXCHANGE || 'events',
+        process.env.RABBITMQ_ROUTE_INVITE || 'user.invite.created',
+        {
+          to: normalizedEmail,
+          subject: 'You have been invited',
+          html: `You have been invited by ${inviterName}. Use token: ${pendingInvite.token}`
+        }
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: 'Active invite already existed; invitation re-sent'
       });
     }
 
@@ -65,7 +101,7 @@ export const createInvite = async (req, res) => {
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     const invite = await Invite.create({
-      email,
+      email: normalizedEmail,
       role,
       invitedBy: inviter._id,
       organization: organizationId,
@@ -75,26 +111,36 @@ export const createInvite = async (req, res) => {
     });
 
     const inviterName = `${inviter.firstName} ${inviter.lastName}`;
-    // Send via HTTP (existing) and via RabbitMQ event for decoupled processing
-    await sendInviteEmail(email, token, inviterName, role);
-    await publishEvent(
-      process.env.RABBITMQ_EXCHANGE || 'events',
-      process.env.RABBITMQ_ROUTE_INVITE || 'user.invite.created',
-      {
-        to: email,
-        subject: 'You have been invited',
-        html: `You have been invited by ${inviterName}. Use token: ${token}`
-      }
-    );
+
+    try {
+    await sendInviteEmail(normalizedEmail, token, inviterName, role);
+    } catch (emailError) {
+      console.error('[invite] Email sending failed, but invite created:', emailError.message);
+    }
+
+    try {
+      await publishEvent(
+        process.env.RABBITMQ_EXCHANGE || 'events',
+        process.env.RABBITMQ_ROUTE_INVITE || 'user.invite.created',
+        {
+          to: email,
+          subject: 'You have been invited',
+          html: `You have been invited by ${inviterName}. Use token: ${token}`
+        }
+      );
+    } catch (rabbitError) {
+      console.error('[invite] RabbitMQ publish failed:', rabbitError.message);
+    }
 
     return res.status(201).json({
       success: true,
-      message: 'Invitation sent successfully',
+      message: 'Invitation created successfully',
       invite: {
         id: invite._id,
         email: invite.email,
         role: invite.role,
-        expiresAt: invite.expiresAt
+        expiresAt: invite.expiresAt,
+        token: token
       }
     });
 

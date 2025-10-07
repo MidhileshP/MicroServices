@@ -77,7 +77,15 @@ const startServer = async () => {
     await connectDatabase();
 
     initSocketClient();
-    await connectRabbit();
+
+    if (process.env.RABBITMQ_URL) {
+      try {
+        await connectRabbit();
+        console.log('[rabbitmq] Connected');
+      } catch (err) {
+        console.warn('[rabbitmq] Failed to connect, continuing without it:', err.message);
+      }
+    }
 
     app.listen(PORT, () => {
       console.log(`User Management Service running on port ${PORT}`);
