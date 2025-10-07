@@ -5,24 +5,12 @@ let transporter = null;
 export const initMailer = async () => {
   try {
     let host = process.env.SMTP_HOST || 'smtp.ethereal.email';
-    let port = parseInt(process.env.SMTP_PORT) || 587; // 587 is STARTTLS for Ethereal; 465 if secure
+    let port = parseInt(process.env.SMTP_PORT) || 587;
     let secure = process.env.SMTP_SECURE === 'true' || port === 465;
     let user = process.env.SMTP_USER;
     let pass = process.env.SMTP_PASS;
 
     const allowFallback = (process.env.MAILER_FALLBACK_ETHEREAL || 'true') === 'true';
-    const missingCreds = !user || !pass;
-    const usingEthereal = !process.env.SMTP_HOST || host === 'smtp.ethereal.email';
-    // if (usingEthereal && (missingCreds || process.env.SMTP_HOST === undefined)) {
-    //   console.log('[mailer] Using Ethereal test account (no SMTP creds provided).');
-    //   const testAccount = await nodemailer.createTestAccount();
-    //   host = 'smtp.ethereal.email';
-    //   port = 587;
-    //   secure = false;
-    //   user = testAccount.user;
-    //   pass = testAccount.pass;
-    //   console.log('[mailer] View emails at: https://ethereal.email/messages');
-    // }
 
     transporter = nodemailer.createTransport({
       host,
@@ -56,7 +44,6 @@ export const initMailer = async () => {
     console.log('[mailer] ✓ SMTP connection verified', { host, port, user: maskedUser });
   } catch (error) {
     console.error('[mailer] ✗ Initialization failed:', error?.message || error);
-    // Fail fast so the service does not run in a degraded state silently
     throw error;
   }
 };
