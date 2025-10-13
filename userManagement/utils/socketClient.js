@@ -1,4 +1,5 @@
 import { io } from 'socket.io-client';
+import { logger } from './logger.js';
 
 let socketClient = null;
 
@@ -14,15 +15,15 @@ export const initSocketClient = () => {
   });
 
   socketClient.on('connect', () => {
-    console.log('Connected to notification service');
+    logger.info('Connected to notification service', { url: NOTIFICATION_SERVICE_URL });
   });
 
   socketClient.on('disconnect', () => {
-    console.log('Disconnected from notification service');
+    logger.warn('Disconnected from notification service');
   });
 
   socketClient.on('error', (error) => {
-    console.error('Socket connection error:', error);
+    logger.error('Socket connection error', { error: error.message });
   });
 
   return socketClient;
@@ -43,7 +44,8 @@ export const emitInviteAccepted = (inviterId, inviteeEmail, role) => {
       message: `${inviteeEmail} has accepted their invitation as ${role}`,
       timestamp: new Date().toISOString()
     });
+    logger.debug('Invite accepted event emitted', { inviterId, inviteeEmail, role });
   } catch (error) {
-    console.error('Failed to emit invite accepted event:', error.message);
+    logger.error('Failed to emit invite accepted event', { error: error.message, inviterId });
   }
 };

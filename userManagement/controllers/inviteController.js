@@ -1,134 +1,31 @@
-import User from '../models/User.js';
-import Invite from '../models/Invite.js';
-import Organization from '../models/Organization.js';
-import RefreshToken from '../models/RefreshToken.js';
-import { canInviteRole, needsOrganization } from '../utils/roleHierarchy.js';
-import { sendInviteEmail } from '../utils/notificationClient.js';
-import { publishEvent } from '../utils/rabbitmq.js';
-import { generateAccessToken } from '../utils/jwt.js';
+import inviteService from '../services/inviteService.js';
+import authService from '../services/authService.js';
 import { emitInviteAccepted } from '../utils/socketClient.js';
-import { generateTOTPSecret, generateQRCode } from '../utils/totp.js';
-import { ok, created, badRequest, unauthorized, forbidden, notFound, serverError } from '../utils/response.js';
+import { ok, created, badRequest, forbidden, notFound, serverError } from '../utils/response.js';
+import { logger } from '../utils/logger.js';
+import { TWO_FACTOR_METHODS } from '../config/constants.js';
 
 export const createInvite = async (req, res) => {
   try {
     const { email, role, organizationName } = req.body;
-    const normalizedEmail = (email || '').trim().toLowerCase();
     const inviter = req.user;
 
-    if (!canInviteRole(inviter.role, role)) {
-      return forbidden(res, `You cannot invite users with role: ${role}`);
-    }
+    const result = await inviteService.createInvite(inviter, email, role, organizationName);
 
-    const existingUser = await User.findOne({ email: normalizedEmail });
-    if (existingUser) {
-      return badRequest(res, 'User with this email already exists');
-    }
-
-    const pendingInvite = await Invite.findOne({ email: normalizedEmail, status: 'pending' });
-
-    if (pendingInvite) {
-      // If expired, refresh token and expiry; otherwise, resend existing invite
-      if (pendingInvite.isExpired()) {
-        const newToken = Invite.generateToken();
-        pendingInvite.token = newToken;
-        pendingInvite.expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-        pendingInvite.status = 'pending';
-        await pendingInvite.save();
-
-        const inviterName = `${inviter.firstName} ${inviter.lastName}`;
-        await sendInviteEmail(normalizedEmail, newToken, inviterName, role);
-        await publishEvent(
-          process.env.RABBITMQ_EXCHANGE || 'events',
-          process.env.RABBITMQ_ROUTE_INVITE || 'user.invite.created',
-          {
-            to: normalizedEmail,
-            subject: 'You have been invited',
-            html: `You have been invited by ${inviterName}. Use token: ${newToken}`
-          }
-        );
-
-        return ok(res, { message: 'Existing expired invite refreshed and re-sent' });
-      }
-
-      const inviterName = `${inviter.firstName} ${inviter.lastName}`;
-      await sendInviteEmail(normalizedEmail, pendingInvite.token, inviterName, role);
-      await publishEvent(
-        process.env.RABBITMQ_EXCHANGE || 'events',
-        process.env.RABBITMQ_ROUTE_INVITE || 'user.invite.created',
-        {
-          to: normalizedEmail,
-          subject: 'You have been invited',
-          html: `You have been invited by ${inviterName}. Use token: ${pendingInvite.token}`
-        }
-      );
-
-      return ok(res, { message: 'Active invite already existed; invitation re-sent' });
-    }
-
-    let organizationId = null;
-
-    if (needsOrganization(role)) {
-      if (role === 'client_admin') {
-        if (!organizationName) {
-          return badRequest(res, 'Organization name required for client_admin role');
-        }
-      } else if (role === 'client_user') {
-        if (!inviter.organization) {
-          return badRequest(res, 'You must belong to an organization to invite client users');
-        }
-        organizationId = inviter.organization;
-      }
-    }
-
-    const token = Invite.generateToken();
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    const invite = await Invite.create({
-      email: normalizedEmail,
-      role,
-      invitedBy: inviter._id,
-      organization: organizationId,
-      organizationName: role === 'client_admin' ? organizationName : null,
-      token,
-      expiresAt
-    });
-
-    const inviterName = `${inviter.firstName} ${inviter.lastName}`;
-
-    try {
-    await sendInviteEmail(normalizedEmail, token, inviterName, role);
-    } catch (emailError) {
-      console.error('[invite] Email sending failed, but invite created:', emailError.message);
-    }
-
-    try {
-      await publishEvent(
-        process.env.RABBITMQ_EXCHANGE || 'events',
-        process.env.RABBITMQ_ROUTE_INVITE || 'user.invite.created',
-        {
-          to: email,
-          subject: 'You have been invited',
-          html: `You have been invited by ${inviterName}. Use token: ${token}`
-        }
-      );
-    } catch (rabbitError) {
-      console.error('[invite] RabbitMQ publish failed:', rabbitError.message);
-    }
-
-    return created(res, {
-      message: 'Invitation created successfully',
-      invite: {
-        id: invite._id,
-        email: invite.email,
-        role: invite.role,
-        expiresAt: invite.expiresAt,
-        token: token
-      }
-    });
+    return created(res, result);
 
   } catch (error) {
-    console.error('Create invite error:', error);
+    logger.error('Create invite error', { error: error.message, inviterId: req.user._id });
+
+    if (error.statusCode === 403) {
+      return forbidden(res, error.message);
+    }
+    if (error.statusCode === 400) {
+      return badRequest(res, error.message);
+    }
+    if (error.statusCode === 409) {
+      return badRequest(res, error.message);
+    }
     return serverError(res);
   }
 };
@@ -137,105 +34,29 @@ export const acceptInvite = async (req, res) => {
   try {
     const { token, firstName, lastName, password, twoFactorMethod } = req.body;
 
-    const invite = await Invite.findOne({ token }).populate('invitedBy');
+    const { user, totpSetup, requiresTOTPSetup } = await inviteService.acceptInvite(
+      token,
+      firstName,
+      lastName,
+      password,
+      twoFactorMethod
+    );
 
-    if (!invite) {
-      return notFound(res, 'Invalid invite token');
-    }
+    emitInviteAccepted(user.invitedBy, user.email, user.role);
 
-    if (!invite.isValid()) {
-      invite.status = 'expired';
-      await invite.save();
-
-      return badRequest(res, 'Invite has expired or is no longer valid');
-    }
-
-    let organizationId = invite.organization;
-
-    if (invite.role === 'client_admin' && invite.organizationName) {
-      const slug = invite.organizationName
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '');
-
-      const existingOrg = await Organization.findOne({ slug });
-
-      if (existingOrg) {
-        return badRequest(res, 'Organization with this name already exists');
-      }
-
-      const tempUser = await User.create({
-        email: invite.email,
-        password,
-        firstName,
-        lastName,
-        role: invite.role,
-        invitedBy: invite.invitedBy._id
-      });
-
-      const organization = await Organization.create({
-        name: invite.organizationName,
-        slug,
-        adminUser: tempUser._id,
-        twoFactorMethod: 'otp'
-      });
-
-      tempUser.organization = organization._id;
-      await tempUser.save();
-
-    } else {
-      await User.create({
-        email: invite.email,
-        password,
-        firstName,
-        lastName,
-        role: invite.role,
-        organization: organizationId,
-        invitedBy: invite.invitedBy._id
-      });
-    }
-
-    const user = await User.findOne({ email: invite.email }).populate('organization');
-
-    // Set user's two-factor preference: request override -> organization default -> leave null
-    const preferredTwoFactor = twoFactorMethod || user.organization?.twoFactorMethod || null;
-    let totpSetup = null;
-    if (preferredTwoFactor === 'otp' || preferredTwoFactor === 'totp') {
-      user.twoFactorMethod = preferredTwoFactor;
-
-      // If TOTP is selected at invite acceptance, initialize TOTP secret and return QR
-      if (preferredTwoFactor === 'totp' && !user.totpEnabled) {
-        const { secret, otpauthUrl } = generateTOTPSecret(user.email);
-        const qrCode = await generateQRCode(otpauthUrl);
-        user.totpSecret = secret;
-        totpSetup = { secret, qrCode };
-      }
-
-      await user.save();
-    }
-
-    invite.status = 'accepted';
-    invite.acceptedAt = new Date();
-    invite.acceptedUserId = user._id;
-    await invite.save();
-
-    emitInviteAccepted(invite.invitedBy._id, user.email, user.role);
-
-    // If TOTP selected, require setup/confirmation before issuing tokens
-    if (preferredTwoFactor === 'totp') {
+    if (requiresTOTPSetup) {
       return created(res, {
         message: 'Account created successfully. Complete TOTP setup to continue.',
         requiresTwoFactor: true,
-        twoFactorMethod: 'totp',
+        twoFactorMethod: TWO_FACTOR_METHODS.TOTP,
         userId: user._id,
         user: user.toSafeObject(),
         totp: totpSetup
       });
     }
 
-    // Otherwise, proceed to log the user in
-    const accessToken = generateAccessToken(user);
-    const refreshToken = await createRefreshToken(user._id, req);
+    const { accessToken } = authService.generateTokens(user);
+    const refreshToken = await authService.createRefreshToken(user._id, req);
 
     return created(res, {
       message: 'Account created successfully',
@@ -245,7 +66,17 @@ export const acceptInvite = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Accept invite error:', error);
+    logger.error('Accept invite error', { error: error.message });
+
+    if (error.statusCode === 404) {
+      return notFound(res, error.message);
+    }
+    if (error.statusCode === 400) {
+      return badRequest(res, error.message);
+    }
+    if (error.statusCode === 409) {
+      return badRequest(res, error.message);
+    }
     return serverError(res);
   }
 };
@@ -253,71 +84,32 @@ export const acceptInvite = async (req, res) => {
 export const getInviteDetails = async (req, res) => {
   try {
     const { token } = req.params;
+    const invite = await inviteService.getInviteDetails(token);
 
-    const invite = await Invite.findOne({ token })
-      .populate('invitedBy', 'firstName lastName email')
-      .populate('organization', 'name');
-
-    if (!invite) {
-      return notFound(res, 'Invalid invite token');
-    }
-
-    if (!invite.isValid()) {
-      return badRequest(res, 'Invite has expired or is no longer valid');
-    }
-
-    return ok(res, {
-      invite: {
-        email: invite.email,
-        role: invite.role,
-        organizationName: invite.organizationName || invite.organization?.name,
-        invitedBy: invite.invitedBy ? {
-          name: `${invite.invitedBy.firstName} ${invite.invitedBy.lastName}`,
-          email: invite.invitedBy.email
-        } : null,
-        expiresAt: invite.expiresAt
-      }
-    });
+    return ok(res, { invite });
 
   } catch (error) {
-    console.error('Get invite details error:', error);
+    logger.error('Get invite details error', { error: error.message, token: req.params.token });
+
+    if (error.statusCode === 404) {
+      return notFound(res, error.message);
+    }
+    if (error.statusCode === 400) {
+      return badRequest(res, error.message);
+    }
     return serverError(res);
   }
 };
 
 export const listInvites = async (req, res) => {
   try {
-    const user = req.user;
     const { status } = req.query;
+    const invites = await inviteService.listInvites(req.user._id, status);
 
-    const query = { invitedBy: user._id };
-    if (status) {
-      query.status = status;
-    }
-
-    const invites = await Invite.find(query)
-      .populate('acceptedUserId', 'firstName lastName email')
-      .sort({ createdAt: -1 });
-
-    return ok(res, {
-      invites: invites.map(invite => ({
-        id: invite._id,
-        email: invite.email,
-        role: invite.role,
-        status: invite.status,
-        organizationName: invite.organizationName,
-        createdAt: invite.createdAt,
-        expiresAt: invite.expiresAt,
-        acceptedAt: invite.acceptedAt,
-        acceptedUser: invite.acceptedUserId ? {
-          name: `${invite.acceptedUserId.firstName} ${invite.acceptedUserId.lastName}`,
-          email: invite.acceptedUserId.email
-        } : null
-      }))
-    });
+    return ok(res, { invites });
 
   } catch (error) {
-    console.error('List invites error:', error);
+    logger.error('List invites error', { error: error.message, userId: req.user._id });
     return serverError(res);
   }
 };
@@ -325,43 +117,19 @@ export const listInvites = async (req, res) => {
 export const revokeInvite = async (req, res) => {
   try {
     const { inviteId } = req.params;
-    const user = req.user;
+    const result = await inviteService.revokeInvite(inviteId, req.user._id);
 
-    const invite = await Invite.findOne({
-      _id: inviteId,
-      invitedBy: user._id
-    });
-
-    if (!invite) {
-      return notFound(res, 'Invite not found');
-    }
-
-    if (invite.status !== 'pending') {
-      return badRequest(res, 'Can only revoke pending invites');
-    }
-
-    invite.status = 'revoked';
-    await invite.save();
-
-    return ok(res, { message: 'Invite revoked successfully' });
+    return ok(res, result);
 
   } catch (error) {
-    console.error('Revoke invite error:', error);
+    logger.error('Revoke invite error', { error: error.message, inviteId: req.params.inviteId });
+
+    if (error.statusCode === 404) {
+      return notFound(res, error.message);
+    }
+    if (error.statusCode === 400) {
+      return badRequest(res, error.message);
+    }
     return serverError(res);
   }
-};
-
-const createRefreshToken = async (userId, req) => {
-  const token = RefreshToken.generateToken();
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-  const refreshToken = await RefreshToken.create({
-    token,
-    user: userId,
-    expiresAt,
-    userAgent: req.headers['user-agent'] || null,
-    ipAddress: req.ip || req.connection.remoteAddress || null
-  });
-
-  return refreshToken;
 };

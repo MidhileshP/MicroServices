@@ -1,4 +1,6 @@
 import nodemailer from 'nodemailer';
+import { logger } from './logger.js';
+import { SMTP_CONFIG } from '../config/constants.js';
 
 let transporter = null;
 
@@ -10,18 +12,14 @@ export const initMailer = async () => {
     let user = process.env.SMTP_USER;
     let pass = process.env.SMTP_PASS;
 
-    console.log('[mailer] Initializing with config:', {
-      host,
-      port,
-      secure,
-      user: user ? `${user.substring(0, 3)}***${user.substring(user.indexOf('@'))}` : 'undefined'
-    });
+    const maskedUser = user ? `${user.substring(0, 3)}***${user.substring(user.indexOf('@'))}` : 'undefined';
+    logger.info('Initializing mailer with config', { host, port, secure, user: maskedUser });
 
     if (!user || !pass) {
-      console.warn('[mailer] SMTP_USER or SMTP_PASS not configured');
+      logger.warn('SMTP_USER or SMTP_PASS not configured');
     }
 
-    const allowFallback = (process.env.MAILER_FALLBACK_ETHEREAL || 'true') === 'true';
+    const allowFallback = SMTP_CONFIG.FALLBACK_ETHEREAL;
 
     transporter = nodemailer.createTransport({
       host,
@@ -36,12 +34,12 @@ export const initMailer = async () => {
     try {
       await transporter.verify();
       const maskedUser = user ? user.substring(0, 3) + '***' + user.substring(user.indexOf('@')) : 'unknown';
-      console.log('[mailer] ✓ SMTP connection verified successfully', { host, port, user: maskedUser });
+      logger.info('SMTP connection verified successfully', { host, port, user: maskedUser });
     } catch (verifyErr) {
-      console.error('[mailer] ✗ SMTP verification failed:', verifyErr.message);
+      logger.error('SMTP verification failed', { error: verifyErr.message });
 
       if (allowFallback) {
-        console.warn('[mailer] Falling back to Ethereal test account...');
+        logger.warn('Falling back to Ethereal test account');
         const testAccount = await nodemailer.createTestAccount();
         host = 'smtp.ethereal.email';
         port = 587;
@@ -50,14 +48,14 @@ export const initMailer = async () => {
         pass = testAccount.pass;
         transporter = nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
         await transporter.verify();
-        console.log('[mailer] ✓ Fallback Ethereal transport verified');
-        console.log('[mailer] View test emails at: https://ethereal.email/messages');
+        logger.info('Fallback Ethereal transport verified');
+        logger.info('View test emails at: https://ethereal.email/messages');
       } else {
         throw verifyErr;
       }
     }
   } catch (error) {
-    console.error('[mailer] ✗ Initialization failed:', error?.message || error);
+    logger.error('Mailer initialization failed', { error: error?.message || error });
     throw error;
   }
 };
@@ -65,25 +63,25 @@ export const initMailer = async () => {
 export const sendEmail = async ({ to, subject, html, text }) => {
   try {
     if (!transporter) {
-      console.error('[mailer] Cannot send email - transporter not initialized');
+      logger.error('Cannot send email - transporter not initialized');
       throw new Error('Mailer not initialized. Please check SMTP configuration.');
     }
 
     const mailOptions = {
-      from: process.env.SMTP_FROM || '"User Management System" <noreply@example.com>',
+      from: SMTP_CONFIG.FROM,
       to,
       subject,
       html: html || text,
       text: text || html
     };
 
-    console.log('[mailer] Sending email to:', to);
+    logger.info('Sending email', { to, subject });
 
     const info = await transporter.sendMail(mailOptions);
 
     const previewUrl = nodemailer.getTestMessageUrl(info);
 
-    console.log('[mailer] ✓ Email sent successfully:', {
+    logger.info('Email sent successfully', {
       messageId: info.messageId,
       to,
       subject,
@@ -91,7 +89,7 @@ export const sendEmail = async ({ to, subject, html, text }) => {
     });
 
     if (previewUrl) {
-      console.log('[mailer] Preview URL:', previewUrl);
+      logger.info('Email preview URL', { url: previewUrl });
     }
 
     return {
@@ -101,8 +99,7 @@ export const sendEmail = async ({ to, subject, html, text }) => {
     };
 
   } catch (error) {
-    console.error('[mailer] ✗ Email sending failed:', error?.message || error);
-    console.error('[mailer] Error details:', error);
+    logger.error('Email sending failed', { error: error?.message || error, to, subject });
     throw new Error('Failed to send email: ' + error.message);
   }
 };

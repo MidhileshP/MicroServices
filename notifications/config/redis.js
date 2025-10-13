@@ -1,4 +1,6 @@
 import { createClient } from 'redis';
+import { logger } from '../utils/logger.js';
+import { REDIS_CONFIG } from './constants.js';
 
 let redisClient = null;
 let redisPublisher = null;
@@ -6,7 +8,7 @@ let redisSubscriber = null;
 
 export const connectRedis = async () => {
   try {
-    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+    const redisUrl = REDIS_CONFIG.URL;
 
     redisClient = createClient({ url: redisUrl });
     redisPublisher = redisClient.duplicate();
@@ -16,22 +18,22 @@ export const connectRedis = async () => {
     await redisPublisher.connect();
     await redisSubscriber.connect();
 
-    console.log('Redis connected successfully');
+    logger.info('Redis connected successfully', { url: redisUrl });
 
     redisClient.on('error', (err) => {
-      console.error('Redis client error:', err);
+      logger.error('Redis client error', { error: err.message });
     });
 
     redisPublisher.on('error', (err) => {
-      console.error('Redis publisher error:', err);
+      logger.error('Redis publisher error', { error: err.message });
     });
 
     redisSubscriber.on('error', (err) => {
-      console.error('Redis subscriber error:', err);
+      logger.error('Redis subscriber error', { error: err.message });
     });
 
   } catch (error) {
-    console.error('Redis connection failed:', error.message);
+    logger.error('Redis connection failed', { error: error.message });
     throw error;
   }
 };
@@ -62,8 +64,8 @@ export const disconnectRedis = async () => {
     if (redisClient) await redisClient.quit();
     if (redisPublisher) await redisPublisher.quit();
     if (redisSubscriber) await redisSubscriber.quit();
-    console.log('Redis connections closed');
+    logger.info('Redis connections closed successfully');
   } catch (error) {
-    console.error('Error closing Redis connections:', error.message);
+    logger.error('Error closing Redis connections', { error: error.message });
   }
 };

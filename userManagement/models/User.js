@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
+import { BCRYPT_SALT_ROUNDS, ROLES, TWO_FACTOR_METHODS } from '../config/constants.js';
 
 const userSchema = new mongoose.Schema({
   email: {
@@ -7,7 +8,8 @@ const userSchema = new mongoose.Schema({
     required: true,
     unique: true,
     lowercase: true,
-    trim: true
+    trim: true,
+    index: true
   },
   password: {
     type: String,
@@ -25,17 +27,19 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['super_admin', 'site_admin', 'operator', 'client_admin', 'client_user'],
-    required: true
+    enum: Object.values(ROLES),
+    required: true,
+    index: true
   },
   organization: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Organization',
-    default: null
+    default: null,
+    index: true
   },
   twoFactorMethod: {
     type: String,
-    enum: ['otp', 'totp'],
+    enum: Object.values(TWO_FACTOR_METHODS),
     default: null
   },
   totpSecret: {
@@ -67,10 +71,14 @@ const userSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Compound indexes for common queries
+userSchema.index({ organization: 1, isActive: 1 });
+userSchema.index({ email: 1, isActive: 1 });
+
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
 
-  const salt = await bcrypt.genSalt(12);
+  const salt = await bcrypt.genSalt(BCRYPT_SALT_ROUNDS.PASSWORD);
   this.password = await bcrypt.hash(this.password, salt);
   next();
 });

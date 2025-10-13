@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { logger } from './logger.js';
 
 const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:4000';
 
@@ -9,8 +10,13 @@ export const sendEmail = async (to, subject, html) => {
       subject,
       html
     });
+    logger.debug('Email sent successfully via notification service', { to, subject });
   } catch (error) {
-    console.error('Failed to send email:', error.message);
+    logger.error('Failed to send email via notification service', {
+      error: error.message,
+      to,
+      subject
+    });
     throw new Error('Email delivery failed');
   }
 };

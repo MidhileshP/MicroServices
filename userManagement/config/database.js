@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { logger } from '../utils/logger.js';
 
 export const connectDatabase = async () => {
   try {
@@ -10,15 +11,14 @@ export const connectDatabase = async () => {
 
     await mongoose.connect(process.env.MONGODB_URI, options);
 
-    console.log('MongoDB connected successfully');
+    logger.info('MongoDB connected successfully');
 
     mongoose.connection.on('error', (err) => {
-      console.error('MongoDB connection error:', err);
+      logger.error('MongoDB connection error', { error: err.message });
     });
 
-
   } catch (error) {
-    console.error('MongoDB connection failed:', error.message);
+    logger.error('MongoDB connection failed', { error: error.message });
     process.exit(1);
   }
 };
@@ -26,8 +26,8 @@ export const connectDatabase = async () => {
 export const disconnectDatabase = async () => {
   try {
     await mongoose.connection.close();
-    console.log('MongoDB connection closed');
+    logger.info('MongoDB connection closed');
   } catch (error) {
-    console.error('Error closing MongoDB connection:', error.message);
+    logger.error('Error closing MongoDB connection', { error: error.message });
   }
 };

@@ -1,29 +1,31 @@
 import amqplib from 'amqplib';
+import { logger } from './logger.js';
 
 let connection = null;
 let channel = null;
 
 export const connectRabbit = async () => {
   const host = process.env.RABBITMQ_HOST || 'localhost';
-  const port = process.env.RABBITMQ_PORT || '5672'; // 5672 is AMQP broker port
+  const port = process.env.RABBITMQ_PORT || '5672';
   const user = process.env.RABBITMQ_USER;
   const pass = process.env.RABBITMQ_PASS;
 
   const creds = user && pass ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : '';
   const builtUrl = `amqp://${creds}${host}:${port}`;
   const url = process.env.RABBITMQ_URL || builtUrl;
+
   try {
     connection = await amqplib.connect(url, { heartbeat: 30 });
-    connection.on('error', (err) => console.error('[rabbitmq] connection error', err));
-    connection.on('close', () => console.warn('[rabbitmq] connection closed'));
+    connection.on('error', (err) => logger.error('RabbitMQ connection error', { error: err.message }));
+    connection.on('close', () => logger.warn('RabbitMQ connection closed'));
 
     channel = await connection.createConfirmChannel();
-    channel.on('error', (err) => console.error('[rabbitmq] channel error', err));
-    channel.on('close', () => console.warn('[rabbitmq] channel closed'));
+    channel.on('error', (err) => logger.error('RabbitMQ channel error', { error: err.message }));
+    channel.on('close', () => logger.warn('RabbitMQ channel closed'));
 
-    console.log('[rabbitmq] Connected');
+    logger.info('RabbitMQ connected successfully', { host, port });
   } catch (error) {
-    console.error('[rabbitmq] Connection failed:', error?.message || error);
+    logger.error('RabbitMQ connection failed', { error: error?.message || error, host, port });
     throw error;
   }
 };
@@ -37,21 +39,26 @@ export const getRabbitChannel = () => {
 
 export const publishEvent = async (exchange, routingKey, message) => {
   if (!channel) {
-    console.warn('[rabbitmq] Channel not initialized, skipping event publish');
+    logger.warn('RabbitMQ channel not initialized, skipping event publish', { exchange, routingKey });
     return false;
   }
 
   try {
     await channel.assertExchange(exchange, 'topic', { durable: true });
     const payload = Buffer.from(JSON.stringify(message));
+
     return new Promise((resolve, reject) => {
       channel.publish(exchange, routingKey, payload, { contentType: 'application/json', persistent: true }, (err) => {
-        if (err) return reject(err);
+        if (err) {
+          logger.error('RabbitMQ publish failed', { error: err.message, exchange, routingKey });
+          return reject(err);
+        }
+        logger.debug('RabbitMQ event published', { exchange, routingKey });
         resolve(true);
       });
     });
   } catch (error) {
-    console.error('[rabbitmq] Publish failed:', error.message);
+    logger.error('RabbitMQ publish error', { error: error.message, exchange, routingKey });
     throw error;
   }
 };
@@ -66,9 +73,9 @@ export const disconnectRabbit = async () => {
       await connection.close();
       connection = null;
     }
-    console.log('[rabbitmq] Disconnected');
+    logger.info('RabbitMQ disconnected successfully');
   } catch (error) {
-    console.error('[rabbitmq] Disconnect error:', error?.message || error);
+    logger.error('RabbitMQ disconnect error', { error: error?.message || error });
   }
 };
 

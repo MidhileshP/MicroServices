@@ -8,13 +8,15 @@ import dotenv from 'dotenv';
 import { connectRedis, getRedisPublisher, getRedisSubscriber } from './config/redis.js';
 import { connectRabbit, getRabbitChannel, disconnectRabbit } from './config/rabbitmq.js';
 import { initMailer } from './utils/mailer.js';
+import { logger } from './utils/logger.js';
+import { RABBITMQ_CONFIG, SOCKET_CONFIG } from './config/constants.js';
 import emailRoutes from './routes/email.js';
-// Bind RabbitMQ consumer(s)
+
 const bindConsumers = async () => {
   const ch = getRabbitChannel();
-  const exchange = process.env.RABBITMQ_EXCHANGE || 'events';
-  const queue = process.env.RABBITMQ_QUEUE_EMAIL || 'notifications.email';
-  const routingKey = process.env.RABBITMQ_ROUTE_INVITE || 'user.invite.created';
+  const exchange = RABBITMQ_CONFIG.EXCHANGE;
+  const queue = RABBITMQ_CONFIG.QUEUE_EMAIL;
+  const routingKey = RABBITMQ_CONFIG.ROUTE_INVITE;
 
   await ch.assertExchange(exchange, 'topic', { durable: true });
   await ch.assertQueue(queue, { durable: true });
@@ -24,18 +26,18 @@ const bindConsumers = async () => {
     if (!msg) return;
     try {
       const payload = JSON.parse(msg.content.toString());
-      // expected: { to, subject, html, text }
       const { to, subject, html, text } = payload;
       const { sendEmail } = await import('./utils/mailer.js');
       await sendEmail({ to, subject, html, text });
       ch.ack(msg);
+      logger.debug('Email consumer processed message', { to, subject });
     } catch (err) {
-      console.error('[rabbitmq] consumer error:', err?.message || err);
-      ch.nack(msg, false, false); // discard bad messages
+      logger.error('RabbitMQ consumer error', { error: err?.message || err });
+      ch.nack(msg, false, false);
     }
   });
 
-  console.log('[rabbitmq] Email consumer bound');
+  logger.info('RabbitMQ email consumer bound successfully', { exchange, queue, routingKey });
 };
 
 dotenv.config();
@@ -46,7 +48,7 @@ const PORT = process.env.PORT || 4000;
 
 app.use(helmet());
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
+  origin: SOCKET_CONFIG.CORS_ORIGIN,
   credentials: true
 }));
 
@@ -64,6 +66,7 @@ app.get('/health', (req, res) => {
 app.use('/api/email', emailRoutes);
 
 app.use((req, res) => {
+  logger.warn('Route not found', { path: req.path, method: req.method });
   res.status(404).json({
     success: false,
     message: 'Route not found'
@@ -71,7 +74,7 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
+  logger.error('Unhandled error', { error: err.message, path: req.path, stack: err.stack });
   res.status(err.status || 500).json({
     success: false,
     message: err.message || 'Internal server error'
@@ -80,7 +83,7 @@ app.use((err, req, res, next) => {
 
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: SOCKET_CONFIG.CORS_ORIGIN,
     methods: ['GET', 'POST'],
     credentials: true
   },
@@ -96,35 +99,35 @@ const startServer = async () => {
 
     io.adapter(createAdapter(pubClient, subClient));
 
-    console.log('Socket.IO Redis adapter configured');
+    logger.info('Socket.IO Redis adapter configured successfully');
 
     if (process.env.RABBITMQ_URL) {
       try {
         await connectRabbit();
         await bindConsumers();
-        console.log('[rabbitmq] Connected and consumers bound');
+        logger.info('RabbitMQ connected and consumers bound');
       } catch (err) {
-        console.warn('[rabbitmq] Failed to connect, continuing without it:', err.message);
+        logger.warn('Failed to connect to RabbitMQ, continuing without it', { error: err.message });
       }
     }
 
     await initMailer();
 
     io.on('connection', (socket) => {
-      console.log('Client connected:', socket.id);
+      logger.info('Socket.IO client connected', { socketId: socket.id });
 
       socket.on('register', (data) => {
         const { userId } = data;
         if (userId) {
           socket.join(`user:${userId}`);
-          console.log(`User ${userId} registered with socket ${socket.id}`);
+          logger.info('User registered with socket', { userId, socketId: socket.id });
         }
       });
 
       socket.on('inviteAccepted', (data) => {
         const { userId, message, timestamp } = data;
 
-        console.log('Invite accepted event:', { userId, message });
+        logger.info('Invite accepted event received', { userId, message });
 
         io.to(`user:${userId}`).emit('notification', {
           type: 'inviteAccepted',
@@ -141,37 +144,37 @@ const startServer = async () => {
       });
 
       socket.on('disconnect', (reason) => {
-        console.log('Client disconnected:', socket.id, 'Reason:', reason);
+        logger.info('Socket.IO client disconnected', { socketId: socket.id, reason });
       });
 
       socket.on('error', (error) => {
-        console.error('Socket error:', error);
+        logger.error('Socket.IO error', { socketId: socket.id, error: error.message });
       });
     });
 
     httpServer.listen(PORT, () => {
-      console.log(`Notifications Service running on port ${PORT}`);
-      console.log(`Socket.IO server ready for connections`);
+      logger.info(`Notifications Service running on port ${PORT}`);
+      logger.info('Socket.IO server ready for connections');
     });
 
   } catch (error) {
-    console.error('Failed to start server:', error);
+    logger.error('Failed to start server', { error: error.message, stack: error.stack });
     process.exit(1);
   }
 };
 
 process.on('SIGTERM', async () => {
-  console.log('SIGTERM signal received: closing server');
+  logger.info('SIGTERM signal received: closing server gracefully');
   httpServer.close(() => {
-    console.log('HTTP server closed');
+    logger.info('HTTP server closed');
     disconnectRabbit().finally(() => process.exit(0));
   });
 });
 
 process.on('SIGINT', async () => {
-  console.log('SIGINT signal received: closing server');
+  logger.info('SIGINT signal received: closing server gracefully');
   httpServer.close(() => {
-    console.log('HTTP server closed');
+    logger.info('HTTP server closed');
     disconnectRabbit().finally(() => process.exit(0));
   });
 });

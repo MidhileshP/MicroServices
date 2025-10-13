@@ -1,11 +1,16 @@
 import { verifyAccessToken } from '../utils/jwt.js';
 import User from '../models/User.js';
+import { logger } from '../utils/logger.js';
 
 export const authenticate = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      logger.warn('Authentication attempt without token', {
+        path: req.path,
+        ip: req.ip
+      });
       return res.status(401).json({
         success: false,
         message: 'No token provided'
@@ -15,9 +20,15 @@ export const authenticate = async (req, res, next) => {
     const token = authHeader.substring(7);
     const decoded = verifyAccessToken(token);
 
-    const user = await User.findById(decoded.userId).select('-password');
+    const user = await User.findById(decoded.userId)
+      .select('-password')
+      .lean();
 
     if (!user || !user.isActive) {
+      logger.warn('Authentication failed for user', {
+        userId: decoded.userId,
+        isActive: user?.isActive
+      });
       return res.status(401).json({
         success: false,
         message: 'User not found or inactive'
@@ -27,6 +38,10 @@ export const authenticate = async (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
+    logger.error('Token verification failed', {
+      error: error.message,
+      path: req.path
+    });
     return res.status(401).json({
       success: false,
       message: 'Invalid or expired token'
@@ -37,6 +52,9 @@ export const authenticate = async (req, res, next) => {
 export const authorize = (...allowedRoles) => {
   return (req, res, next) => {
     if (!req.user) {
+      logger.warn('Authorization check without authenticated user', {
+        path: req.path
+      });
       return res.status(401).json({
         success: false,
         message: 'Authentication required'
@@ -44,6 +62,12 @@ export const authorize = (...allowedRoles) => {
     }
 
     if (!allowedRoles.includes(req.user.role)) {
+      logger.warn('Authorization denied', {
+        userId: req.user._id,
+        userRole: req.user.role,
+        requiredRoles: allowedRoles,
+        path: req.path
+      });
       return res.status(403).json({
         success: false,
         message: 'Insufficient permissions'

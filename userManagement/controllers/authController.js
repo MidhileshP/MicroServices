@@ -1,68 +1,30 @@
 import User from '../models/User.js';
-import RefreshToken from '../models/RefreshToken.js';
-import { generateAccessToken } from '../utils/jwt.js';
-import { generateOTP, hashOTP, verifyOTP, getOTPExpiry } from '../utils/otp.js';
-import { generateTOTPSecret, generateQRCode, verifyTOTPToken } from '../utils/totp.js';
-import { sendOTPEmail } from '../utils/notificationClient.js';
-import { ok, created, badRequest, unauthorized, forbidden, notFound, serverError } from '../utils/response.js';
+import authService from '../services/authService.js';
+import { ok, badRequest, unauthorized, notFound, serverError } from '../utils/response.js';
+import { logger } from '../utils/logger.js';
 
 export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email }).populate('organization');
+    const user = await authService.authenticate(email, password);
+    const twoFactorResult = await authService.initiateTwoFactor(user);
 
-    if (!user || !user.isActive) {
-      return unauthorized(res, 'Invalid credentials');
-    }
-
-    const isPasswordValid = await user.comparePassword(password);
-
-    if (!isPasswordValid) {
-      return unauthorized(res, 'Invalid credentials');
-    }
-
-    const twoFactorMethod = user.organization?.twoFactorMethod || user.twoFactorMethod;
-
-    if (!twoFactorMethod) {
+    if (!twoFactorResult.requiresTwoFactor) {
       return respondWithTokens(res, user, req);
     }
 
-    if (twoFactorMethod === 'otp') {
-      const otp = generateOTP();
-      const otpHash = await hashOTP(otp);
-
-      user.otpHash = otpHash;
-      user.otpExpiry = getOTPExpiry(10);
-      await user.save();
-
-      await sendOTPEmail(email, otp);
-
-      return res.json({
-        success: true,
-        requiresTwoFactor: true,
-        twoFactorMethod: 'otp',
-        userId: user._id,
-        message: 'OTP sent to your email'
-      });
-    }
-
-    if (twoFactorMethod === 'totp') {
-      if (!user.totpEnabled) {
-        return badRequest(res, 'TOTP not set up. Please complete TOTP setup first.');
-      }
-
-      return res.json({
-        success: true,
-        requiresTwoFactor: true,
-        twoFactorMethod: 'totp',
-        userId: user._id,
-        message: 'Please provide your TOTP token'
-      });
-    }
+    return res.json({ success: true, ...twoFactorResult });
 
   } catch (error) {
-    console.error('Login error:', error);
+    logger.error('Login error', { error: error.message, email: req.body.email });
+
+    if (error.statusCode === 401) {
+      return unauthorized(res, error.message);
+    }
+    if (error.statusCode === 400) {
+      return badRequest(res, error.message);
+    }
     return serverError(res);
   }
 };
@@ -70,39 +32,18 @@ export const login = async (req, res) => {
 export const verifyOTPHandler = async (req, res) => {
   try {
     const { userId, otp } = req.body;
-
-    const user = await User.findById(userId);
-
-    if (!user) {
-      return notFound(res, 'User not found');
-    }
-
-    if (!user.otpHash || !user.otpExpiry) {
-      return badRequest(res, 'No OTP found. Please login again.');
-    }
-
-    if (Date.now() > user.otpExpiry) {
-      user.otpHash = null;
-      user.otpExpiry = null;
-      await user.save();
-
-      return badRequest(res, 'OTP expired. Please login again.');
-    }
-
-    const isValid = await verifyOTP(otp, user.otpHash);
-
-    if (!isValid) {
-      return badRequest(res, 'Invalid OTP');
-    }
-
-    user.otpHash = null;
-    user.otpExpiry = null;
-    await user.save();
-
+    const user = await authService.verifyOTP(userId, otp);
     return respondWithTokens(res, user, req);
 
   } catch (error) {
-    console.error('OTP verification error:', error);
+    logger.error('OTP verification error', { error: error.message, userId: req.body.userId });
+
+    if (error.statusCode === 404) {
+      return notFound(res, error.message);
+    }
+    if (error.statusCode === 400) {
+      return badRequest(res, error.message);
+    }
     return serverError(res);
   }
 };
@@ -110,49 +51,38 @@ export const verifyOTPHandler = async (req, res) => {
 export const verifyTOTPHandler = async (req, res) => {
   try {
     const { userId, token } = req.body;
-
-    const user = await User.findById(userId);
-
-    if (!user) {
-      return notFound(res, 'User not found');
-    }
-
-    if (!user.totpEnabled || !user.totpSecret) {
-      return badRequest(res, 'TOTP not enabled');
-    }
-
-    const isValid = verifyTOTPToken(token, user.totpSecret);
-
-    if (!isValid) {
-      return badRequest(res, 'Invalid TOTP token');
-    }
-
+    const user = await authService.verifyTOTP(userId, token);
     return respondWithTokens(res, user, req);
 
   } catch (error) {
-    console.error('TOTP verification error:', error);
+    logger.error('TOTP verification error', { error: error.message, userId: req.body.userId });
+
+    if (error.statusCode === 404) {
+      return notFound(res, error.message);
+    }
+    if (error.statusCode === 400) {
+      return badRequest(res, error.message);
+    }
     return serverError(res);
   }
 };
 
 export const setupTOTP = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
+    const { secret, qrCode } = await authService.setupTOTP(req.user._id, req.user.email);
 
-    if (!user) {
-      return notFound(res, 'User not found');
-    }
-
-    const { secret, otpauthUrl } = generateTOTPSecret(user.email);
-    const qrCode = await generateQRCode(otpauthUrl);
-
-    user.totpSecret = secret;
-    await user.save();
-
-    return ok(res, { secret, qrCode, message: 'Scan the QR code with your authenticator app' });
+    return ok(res, {
+      secret,
+      qrCode,
+      message: 'Scan the QR code with your authenticator app'
+    });
 
   } catch (error) {
-    console.error('TOTP setup error:', error);
+    logger.error('TOTP setup error', { error: error.message, userId: req.user._id });
+
+    if (error.statusCode === 404) {
+      return notFound(res, error.message);
+    }
     return serverError(res);
   }
 };
@@ -160,26 +90,16 @@ export const setupTOTP = async (req, res) => {
 export const confirmTOTP = async (req, res) => {
   try {
     const { userId, token } = req.body;
-    const user = await User.findById(userId);
-
-    if (!user || !user.totpSecret) {
-      return badRequest(res, 'TOTP not initialized');
-    }
-
-    const isValid = verifyTOTPToken(token, user.totpSecret);
-
-    if (!isValid) {
-      return badRequest(res, 'Invalid TOTP token');
-    }
-
-    user.totpEnabled = true;
-    user.twoFactorMethod = 'totp';
-    await user.save();
+    await authService.confirmTOTP(userId, token);
 
     return ok(res, { message: 'TOTP enabled successfully' });
 
   } catch (error) {
-    console.error('TOTP confirmation error:', error);
+    logger.error('TOTP confirmation error', { error: error.message, userId: req.body.userId });
+
+    if (error.statusCode === 400) {
+      return badRequest(res, error.message);
+    }
     return serverError(res);
   }
 };
@@ -187,28 +107,23 @@ export const confirmTOTP = async (req, res) => {
 export const refreshTokenHandler = async (req, res) => {
   try {
     const { refreshToken: token } = req.body;
+    const storedToken = await authService.refreshAccessToken(token);
 
-    if (!token) {
-      return badRequest(res, 'Refresh token required');
-    }
-
-    const storedToken = await RefreshToken.findOne({ token }).populate('user');
-
-    if (!storedToken || !storedToken.isValid()) {
-      return unauthorized(res, 'Invalid or expired refresh token');
-    }
-
-    storedToken.isRevoked = true;
-    const newRefreshToken = await createRefreshToken(storedToken.user._id, req);
-    storedToken.replacedBy = newRefreshToken.token;
-    await storedToken.save();
-
-    const accessToken = generateAccessToken(storedToken.user);
+    await authService.revokeRefreshToken(token, req);
+    const newRefreshToken = await authService.createRefreshToken(storedToken.user._id, req);
+    const { accessToken } = authService.generateTokens(storedToken.user);
 
     return ok(res, { accessToken, refreshToken: newRefreshToken.token });
 
   } catch (error) {
-    console.error('Refresh token error:', error);
+    logger.error('Refresh token error', { error: error.message });
+
+    if (error.statusCode === 401) {
+      return unauthorized(res, error.message);
+    }
+    if (error.statusCode === 400) {
+      return badRequest(res, error.message);
+    }
     return serverError(res);
   }
 };
@@ -216,56 +131,39 @@ export const refreshTokenHandler = async (req, res) => {
 export const logout = async (req, res) => {
   try {
     const { refreshToken: token } = req.body;
-
-    if (token) {
-      await RefreshToken.findOneAndUpdate(
-        { token },
-        { isRevoked: true }
-      );
-    }
+    await authService.logout(token);
 
     return ok(res, { message: 'Logged out successfully' });
 
   } catch (error) {
-    console.error('Logout error:', error);
+    logger.error('Logout error', { error: error.message });
     return serverError(res);
   }
 };
 
 export const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).populate('organization');
+    const user = await User.findById(req.user._id)
+      .populate('organization')
+      .lean();
 
-    return ok(res, { user: user.toSafeObject() });
+    if (!user) {
+      return notFound(res, 'User not found');
+    }
+
+    const { password, totpSecret, otpHash, ...safeUser } = user;
+
+    return ok(res, { user: safeUser });
 
   } catch (error) {
-    console.error('Get profile error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    logger.error('Get profile error', { error: error.message, userId: req.user._id });
+    return serverError(res);
   }
 };
 
-const createRefreshToken = async (userId, req) => {
-  const token = RefreshToken.generateToken();
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-  const refreshToken = await RefreshToken.create({
-    token,
-    user: userId,
-    expiresAt,
-    userAgent: req.headers['user-agent'] || null,
-    ipAddress: req.ip || req.connection.remoteAddress || null
-  });
-
-  return refreshToken;
-};
-
-// Centralized successful auth response
 const respondWithTokens = async (res, user, req) => {
-  const accessToken = generateAccessToken(user);
-  const refreshToken = await createRefreshToken(user._id, req);
+  const { accessToken } = authService.generateTokens(user);
+  const refreshToken = await authService.createRefreshToken(user._id, req);
 
   return ok(res, {
     requiresTwoFactor: false,

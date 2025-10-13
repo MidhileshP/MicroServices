@@ -1,22 +1,25 @@
 import mongoose from 'mongoose';
 import crypto from 'crypto';
+import { ROLES, INVITE_STATUS } from '../config/constants.js';
 
 const inviteSchema = new mongoose.Schema({
   email: {
     type: String,
     required: true,
     lowercase: true,
-    trim: true
+    trim: true,
+    index: true
   },
   role: {
     type: String,
-    enum: ['site_admin', 'operator', 'client_admin', 'client_user'],
+    enum: [ROLES.SITE_ADMIN, ROLES.OPERATOR, ROLES.CLIENT_ADMIN, ROLES.CLIENT_USER],
     required: true
   },
   invitedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
+    index: true
   },
   organization: {
     type: mongoose.Schema.Types.ObjectId,
@@ -30,12 +33,14 @@ const inviteSchema = new mongoose.Schema({
   token: {
     type: String,
     required: true,
-    unique: true
+    unique: true,
+    index: true
   },
   status: {
     type: String,
-    enum: ['pending', 'accepted', 'expired', 'revoked'],
-    default: 'pending'
+    enum: Object.values(INVITE_STATUS),
+    default: INVITE_STATUS.PENDING,
+    index: true
   },
   expiresAt: {
     type: Date,
@@ -54,6 +59,10 @@ const inviteSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Compound indexes for common queries
+inviteSchema.index({ email: 1, status: 1 });
+inviteSchema.index({ invitedBy: 1, status: 1 });
+
 inviteSchema.statics.generateToken = function() {
   return crypto.randomBytes(32).toString('hex');
 };
@@ -63,7 +72,7 @@ inviteSchema.methods.isExpired = function() {
 };
 
 inviteSchema.methods.isValid = function() {
-  return this.status === 'pending' && !this.isExpired();
+  return this.status === INVITE_STATUS.PENDING && !this.isExpired();
 };
 
 export default mongoose.model('Invite', inviteSchema);

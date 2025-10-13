@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { TWO_FACTOR_METHODS } from '../config/constants.js';
 
 const organizationSchema = new mongoose.Schema({
   name: {
@@ -11,17 +12,19 @@ const organizationSchema = new mongoose.Schema({
     required: true,
     unique: true,
     lowercase: true,
-    trim: true
+    trim: true,
+    index: true
   },
   twoFactorMethod: {
     type: String,
-    enum: ['otp', 'totp'],
-    default: 'otp'
+    enum: Object.values(TWO_FACTOR_METHODS),
+    default: TWO_FACTOR_METHODS.OTP
   },
   adminUser: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
+    index: true
   },
   isActive: {
     type: Boolean,
@@ -36,5 +39,7 @@ const organizationSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Index for active organizations lookup
+organizationSchema.index({ isActive: 1 });
 
 export default mongoose.model('Organization', organizationSchema);
