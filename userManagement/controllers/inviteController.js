@@ -2,12 +2,13 @@ import User from '../models/User.js';
 import Invite from '../models/Invite.js';
 import Organization from '../models/Organization.js';
 import RefreshToken from '../models/RefreshToken.js';
-import { canInviteRole, needsOrganization, isHigherRole } from '../utils/roleHierarchy.js';
+import { canInviteRole, needsOrganization } from '../utils/roleHierarchy.js';
 import { sendInviteEmail } from '../utils/notificationClient.js';
 import { publishEvent } from '../utils/rabbitmq.js';
 import { generateAccessToken } from '../utils/jwt.js';
 import { emitInviteAccepted } from '../utils/socketClient.js';
 import { generateTOTPSecret, generateQRCode } from '../utils/totp.js';
+import { ok, created, badRequest, unauthorized, forbidden, notFound, serverError } from '../utils/response.js';
 
 export const createInvite = async (req, res) => {
   try {
@@ -16,18 +17,12 @@ export const createInvite = async (req, res) => {
     const inviter = req.user;
 
     if (!canInviteRole(inviter.role, role)) {
-      return res.status(403).json({
-        success: false,
-        message: `You cannot invite users with role: ${role}`
-      });
+      return forbidden(res, `You cannot invite users with role: ${role}`);
     }
 
     const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'User with this email already exists'
-      });
+      return badRequest(res, 'User with this email already exists');
     }
 
     const pendingInvite = await Invite.findOne({ email: normalizedEmail, status: 'pending' });
@@ -53,10 +48,7 @@ export const createInvite = async (req, res) => {
           }
         );
 
-        return res.status(200).json({
-          success: true,
-          message: 'Existing expired invite refreshed and re-sent'
-        });
+        return ok(res, { message: 'Existing expired invite refreshed and re-sent' });
       }
 
       const inviterName = `${inviter.firstName} ${inviter.lastName}`;
@@ -71,10 +63,7 @@ export const createInvite = async (req, res) => {
         }
       );
 
-      return res.status(200).json({
-        success: true,
-        message: 'Active invite already existed; invitation re-sent'
-      });
+      return ok(res, { message: 'Active invite already existed; invitation re-sent' });
     }
 
     let organizationId = null;
@@ -82,17 +71,11 @@ export const createInvite = async (req, res) => {
     if (needsOrganization(role)) {
       if (role === 'client_admin') {
         if (!organizationName) {
-          return res.status(400).json({
-            success: false,
-            message: 'Organization name required for client_admin role'
-          });
+          return badRequest(res, 'Organization name required for client_admin role');
         }
       } else if (role === 'client_user') {
         if (!inviter.organization) {
-          return res.status(400).json({
-            success: false,
-            message: 'You must belong to an organization to invite client users'
-          });
+          return badRequest(res, 'You must belong to an organization to invite client users');
         }
         organizationId = inviter.organization;
       }
@@ -133,8 +116,7 @@ export const createInvite = async (req, res) => {
       console.error('[invite] RabbitMQ publish failed:', rabbitError.message);
     }
 
-    return res.status(201).json({
-      success: true,
+    return created(res, {
       message: 'Invitation created successfully',
       invite: {
         id: invite._id,
@@ -147,10 +129,7 @@ export const createInvite = async (req, res) => {
 
   } catch (error) {
     console.error('Create invite error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 
@@ -161,20 +140,14 @@ export const acceptInvite = async (req, res) => {
     const invite = await Invite.findOne({ token }).populate('invitedBy');
 
     if (!invite) {
-      return res.status(404).json({
-        success: false,
-        message: 'Invalid invite token'
-      });
+      return notFound(res, 'Invalid invite token');
     }
 
     if (!invite.isValid()) {
       invite.status = 'expired';
       await invite.save();
 
-      return res.status(400).json({
-        success: false,
-        message: 'Invite has expired or is no longer valid'
-      });
+      return badRequest(res, 'Invite has expired or is no longer valid');
     }
 
     let organizationId = invite.organization;
@@ -188,10 +161,7 @@ export const acceptInvite = async (req, res) => {
       const existingOrg = await Organization.findOne({ slug });
 
       if (existingOrg) {
-        return res.status(400).json({
-          success: false,
-          message: 'Organization with this name already exists'
-        });
+        return badRequest(res, 'Organization with this name already exists');
       }
 
       const tempUser = await User.create({
@@ -253,8 +223,7 @@ export const acceptInvite = async (req, res) => {
 
     // If TOTP selected, require setup/confirmation before issuing tokens
     if (preferredTwoFactor === 'totp') {
-      return res.status(201).json({
-        success: true,
+      return created(res, {
         message: 'Account created successfully. Complete TOTP setup to continue.',
         requiresTwoFactor: true,
         twoFactorMethod: 'totp',
@@ -268,8 +237,7 @@ export const acceptInvite = async (req, res) => {
     const accessToken = generateAccessToken(user);
     const refreshToken = await createRefreshToken(user._id, req);
 
-    return res.status(201).json({
-      success: true,
+    return created(res, {
       message: 'Account created successfully',
       accessToken,
       refreshToken: refreshToken.token,
@@ -278,10 +246,7 @@ export const acceptInvite = async (req, res) => {
 
   } catch (error) {
     console.error('Accept invite error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 
@@ -294,21 +259,14 @@ export const getInviteDetails = async (req, res) => {
       .populate('organization', 'name');
 
     if (!invite) {
-      return res.status(404).json({
-        success: false,
-        message: 'Invalid invite token'
-      });
+      return notFound(res, 'Invalid invite token');
     }
 
     if (!invite.isValid()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invite has expired or is no longer valid'
-      });
+      return badRequest(res, 'Invite has expired or is no longer valid');
     }
 
-    return res.json({
-      success: true,
+    return ok(res, {
       invite: {
         email: invite.email,
         role: invite.role,
@@ -323,10 +281,7 @@ export const getInviteDetails = async (req, res) => {
 
   } catch (error) {
     console.error('Get invite details error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 
@@ -344,8 +299,7 @@ export const listInvites = async (req, res) => {
       .populate('acceptedUserId', 'firstName lastName email')
       .sort({ createdAt: -1 });
 
-    return res.json({
-      success: true,
+    return ok(res, {
       invites: invites.map(invite => ({
         id: invite._id,
         email: invite.email,
@@ -364,10 +318,7 @@ export const listInvites = async (req, res) => {
 
   } catch (error) {
     console.error('List invites error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 
@@ -382,33 +333,21 @@ export const revokeInvite = async (req, res) => {
     });
 
     if (!invite) {
-      return res.status(404).json({
-        success: false,
-        message: 'Invite not found'
-      });
+      return notFound(res, 'Invite not found');
     }
 
     if (invite.status !== 'pending') {
-      return res.status(400).json({
-        success: false,
-        message: 'Can only revoke pending invites'
-      });
+      return badRequest(res, 'Can only revoke pending invites');
     }
 
     invite.status = 'revoked';
     await invite.save();
 
-    return res.json({
-      success: true,
-      message: 'Invite revoked successfully'
-    });
+    return ok(res, { message: 'Invite revoked successfully' });
 
   } catch (error) {
     console.error('Revoke invite error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 

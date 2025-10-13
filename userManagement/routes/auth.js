@@ -13,20 +13,19 @@ import { authenticate } from '../middleware/auth.js';
 import {
   loginValidation,
   verifyOTPValidation,
-  verifyTOTPValidation,
-  setupTOTPValidation
+  sixDigitCodeValidation
 } from '../middleware/validation.js';
 
 const router = express.Router();
 
 router.post('/login', loginValidation, login);
 router.post('/verify-otp', verifyOTPValidation, verifyOTPHandler);
-router.post('/verify-totp', verifyTOTPValidation, verifyTOTPHandler);
+router.post('/verify-totp', sixDigitCodeValidation('token', 'TOTP token'), verifyTOTPHandler);
 router.post('/refresh', refreshTokenHandler);
 router.post('/logout', logout);
 
 router.get('/profile', authenticate, getProfile);
 router.post('/totp/setup', authenticate, setupTOTP);
-router.post('/totp/confirm', verifyTOTPValidation, confirmTOTP);
+router.post('/totp/confirm', sixDigitCodeValidation('token', 'TOTP token'), confirmTOTP);
 
 export default router;

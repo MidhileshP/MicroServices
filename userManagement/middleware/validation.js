@@ -1,4 +1,4 @@
-import { body, param, validationResult } from 'express-validator';
+import { body, validationResult } from 'express-validator';
 
 export const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -47,26 +47,17 @@ export const createInviteValidation = [
   validate
 ];
 
+// Consolidated six-digit code validator for OTP/TOTP
+export const sixDigitCodeValidation = (field, label = 'code') => [
+  body(field)
+    .isLength({ min: 6, max: 6 })
+    .isNumeric()
+    .withMessage(`${label} must be 6 digits`),
+  validate
+];
+
 export const verifyOTPValidation = [
-  body('otp')
-    .isLength({ min: 6, max: 6 })
-    .isNumeric()
-    .withMessage('OTP must be 6 digits'),
-  validate
+  ...sixDigitCodeValidation('otp', 'OTP')
 ];
 
-export const verifyTOTPValidation = [
-  body('token')
-    .isLength({ min: 6, max: 6 })
-    .isNumeric()
-    .withMessage('TOTP token must be 6 digits'),
-  validate
-];
-
-export const setupTOTPValidation = [
-  body('token')
-    .isLength({ min: 6, max: 6 })
-    .isNumeric()
-    .withMessage('TOTP token must be 6 digits'),
-  validate
-];
+// removed unused setupTOTPValidation

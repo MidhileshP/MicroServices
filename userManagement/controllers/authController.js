@@ -1,10 +1,10 @@
 import User from '../models/User.js';
 import RefreshToken from '../models/RefreshToken.js';
-import Organization from '../models/Organization.js';
 import { generateAccessToken } from '../utils/jwt.js';
 import { generateOTP, hashOTP, verifyOTP, getOTPExpiry } from '../utils/otp.js';
 import { generateTOTPSecret, generateQRCode, verifyTOTPToken } from '../utils/totp.js';
 import { sendOTPEmail } from '../utils/notificationClient.js';
+import { ok, created, badRequest, unauthorized, forbidden, notFound, serverError } from '../utils/response.js';
 
 export const login = async (req, res) => {
   try {
@@ -13,34 +13,19 @@ export const login = async (req, res) => {
     const user = await User.findOne({ email }).populate('organization');
 
     if (!user || !user.isActive) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
+      return unauthorized(res, 'Invalid credentials');
     }
 
     const isPasswordValid = await user.comparePassword(password);
 
     if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
+      return unauthorized(res, 'Invalid credentials');
     }
 
     const twoFactorMethod = user.organization?.twoFactorMethod || user.twoFactorMethod;
 
     if (!twoFactorMethod) {
-      const accessToken = generateAccessToken(user);
-      const refreshToken = await createRefreshToken(user._id, req);
-
-      return res.json({
-        success: true,
-        requiresTwoFactor: false,
-        accessToken,
-        refreshToken: refreshToken.token,
-        user: user.toSafeObject()
-      });
+      return respondWithTokens(res, user, req);
     }
 
     if (twoFactorMethod === 'otp') {
@@ -64,10 +49,7 @@ export const login = async (req, res) => {
 
     if (twoFactorMethod === 'totp') {
       if (!user.totpEnabled) {
-        return res.status(400).json({
-          success: false,
-          message: 'TOTP not set up. Please complete TOTP setup first.'
-        });
+        return badRequest(res, 'TOTP not set up. Please complete TOTP setup first.');
       }
 
       return res.json({
@@ -81,10 +63,7 @@ export const login = async (req, res) => {
 
   } catch (error) {
     console.error('Login error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 
@@ -95,17 +74,11 @@ export const verifyOTPHandler = async (req, res) => {
     const user = await User.findById(userId);
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return notFound(res, 'User not found');
     }
 
     if (!user.otpHash || !user.otpExpiry) {
-      return res.status(400).json({
-        success: false,
-        message: 'No OTP found. Please login again.'
-      });
+      return badRequest(res, 'No OTP found. Please login again.');
     }
 
     if (Date.now() > user.otpExpiry) {
@@ -113,41 +86,24 @@ export const verifyOTPHandler = async (req, res) => {
       user.otpExpiry = null;
       await user.save();
 
-      return res.status(400).json({
-        success: false,
-        message: 'OTP expired. Please login again.'
-      });
+      return badRequest(res, 'OTP expired. Please login again.');
     }
 
     const isValid = await verifyOTP(otp, user.otpHash);
 
     if (!isValid) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid OTP'
-      });
+      return badRequest(res, 'Invalid OTP');
     }
 
     user.otpHash = null;
     user.otpExpiry = null;
     await user.save();
 
-    const accessToken = generateAccessToken(user);
-    const refreshToken = await createRefreshToken(user._id, req);
-
-    return res.json({
-      success: true,
-      accessToken,
-      refreshToken: refreshToken.token,
-      user: user.toSafeObject()
-    });
+    return respondWithTokens(res, user, req);
 
   } catch (error) {
     console.error('OTP verification error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 
@@ -158,44 +114,24 @@ export const verifyTOTPHandler = async (req, res) => {
     const user = await User.findById(userId);
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return notFound(res, 'User not found');
     }
 
     if (!user.totpEnabled || !user.totpSecret) {
-      return res.status(400).json({
-        success: false,
-        message: 'TOTP not enabled'
-      });
+      return badRequest(res, 'TOTP not enabled');
     }
 
     const isValid = verifyTOTPToken(token, user.totpSecret);
 
     if (!isValid) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid TOTP token'
-      });
+      return badRequest(res, 'Invalid TOTP token');
     }
 
-    const accessToken = generateAccessToken(user);
-    const refreshToken = await createRefreshToken(user._id, req);
-
-    return res.json({
-      success: true,
-      accessToken,
-      refreshToken: refreshToken.token,
-      user: user.toSafeObject()
-    });
+    return respondWithTokens(res, user, req);
 
   } catch (error) {
     console.error('TOTP verification error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 
@@ -204,10 +140,7 @@ export const setupTOTP = async (req, res) => {
     const user = await User.findById(req.user._id);
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return notFound(res, 'User not found');
     }
 
     const { secret, otpauthUrl } = generateTOTPSecret(user.email);
@@ -216,19 +149,11 @@ export const setupTOTP = async (req, res) => {
     user.totpSecret = secret;
     await user.save();
 
-    return res.json({
-      success: true,
-      secret,
-      qrCode,
-      message: 'Scan the QR code with your authenticator app'
-    });
+    return ok(res, { secret, qrCode, message: 'Scan the QR code with your authenticator app' });
 
   } catch (error) {
     console.error('TOTP setup error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 
@@ -238,36 +163,24 @@ export const confirmTOTP = async (req, res) => {
     const user = await User.findById(userId);
 
     if (!user || !user.totpSecret) {
-      return res.status(400).json({
-        success: false,
-        message: 'TOTP not initialized'
-      });
+      return badRequest(res, 'TOTP not initialized');
     }
 
     const isValid = verifyTOTPToken(token, user.totpSecret);
 
     if (!isValid) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid TOTP token'
-      });
+      return badRequest(res, 'Invalid TOTP token');
     }
 
     user.totpEnabled = true;
     user.twoFactorMethod = 'totp';
     await user.save();
 
-    return res.json({
-      success: true,
-      message: 'TOTP enabled successfully'
-    });
+    return ok(res, { message: 'TOTP enabled successfully' });
 
   } catch (error) {
     console.error('TOTP confirmation error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 
@@ -276,19 +189,13 @@ export const refreshTokenHandler = async (req, res) => {
     const { refreshToken: token } = req.body;
 
     if (!token) {
-      return res.status(400).json({
-        success: false,
-        message: 'Refresh token required'
-      });
+      return badRequest(res, 'Refresh token required');
     }
 
     const storedToken = await RefreshToken.findOne({ token }).populate('user');
 
     if (!storedToken || !storedToken.isValid()) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid or expired refresh token'
-      });
+      return unauthorized(res, 'Invalid or expired refresh token');
     }
 
     storedToken.isRevoked = true;
@@ -298,18 +205,11 @@ export const refreshTokenHandler = async (req, res) => {
 
     const accessToken = generateAccessToken(storedToken.user);
 
-    return res.json({
-      success: true,
-      accessToken,
-      refreshToken: newRefreshToken.token
-    });
+    return ok(res, { accessToken, refreshToken: newRefreshToken.token });
 
   } catch (error) {
     console.error('Refresh token error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 
@@ -324,17 +224,11 @@ export const logout = async (req, res) => {
       );
     }
 
-    return res.json({
-      success: true,
-      message: 'Logged out successfully'
-    });
+    return ok(res, { message: 'Logged out successfully' });
 
   } catch (error) {
     console.error('Logout error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
+    return serverError(res);
   }
 };
 
@@ -342,10 +236,7 @@ export const getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).populate('organization');
 
-    return res.json({
-      success: true,
-      user: user.toSafeObject()
-    });
+    return ok(res, { user: user.toSafeObject() });
 
   } catch (error) {
     console.error('Get profile error:', error);
@@ -369,4 +260,17 @@ const createRefreshToken = async (userId, req) => {
   });
 
   return refreshToken;
+};
+
+// Centralized successful auth response
+const respondWithTokens = async (res, user, req) => {
+  const accessToken = generateAccessToken(user);
+  const refreshToken = await createRefreshToken(user._id, req);
+
+  return ok(res, {
+    requiresTwoFactor: false,
+    accessToken,
+    refreshToken: refreshToken.token,
+    user: user.toSafeObject()
+  });
 };
