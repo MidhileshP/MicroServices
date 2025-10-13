@@ -27,6 +27,6 @@ router.post('/logout', logout);
 
 router.get('/profile', authenticate, getProfile);
 router.post('/totp/setup', authenticate, setupTOTP);
-router.post('/totp/confirm', authenticate, setupTOTPValidation, confirmTOTP);
+router.post('/totp/confirm', verifyTOTPValidation, confirmTOTP);
 
 export default router;

@@ -27,6 +27,10 @@ export const acceptInviteValidation = [
     .withMessage('Password must be at least 8 characters')
     .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
     .withMessage('Password must contain uppercase, lowercase, and number'),
+  body('twoFactorMethod')
+    .optional()
+    .isIn(['otp', 'totp'])
+    .withMessage('twoFactorMethod must be either otp or totp'),
   validate
 ];
 
@@ -36,7 +40,7 @@ export const createInviteValidation = [
     .isIn(['site_admin', 'operator', 'client_admin', 'client_user'])
     .withMessage('Invalid role'),
   body('organizationName')
-    .optional()
+    .optional({ nullable: true})
     .trim()
     .notEmpty()
     .withMessage('Organization name cannot be empty'),

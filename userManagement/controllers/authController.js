@@ -234,8 +234,8 @@ export const setupTOTP = async (req, res) => {
 
 export const confirmTOTP = async (req, res) => {
   try {
-    const { token } = req.body;
-    const user = await User.findById(req.user._id);
+    const { userId, token } = req.body;
+    const user = await User.findById(userId);
 
     if (!user || !user.totpSecret) {
       return res.status(400).json({

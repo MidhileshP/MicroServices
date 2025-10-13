@@ -7,6 +7,7 @@ import { sendInviteEmail } from '../utils/notificationClient.js';
 import { publishEvent } from '../utils/rabbitmq.js';
 import { generateAccessToken } from '../utils/jwt.js';
 import { emitInviteAccepted } from '../utils/socketClient.js';
+import { generateTOTPSecret, generateQRCode } from '../utils/totp.js';
 
 export const createInvite = async (req, res) => {
   try {
@@ -228,9 +229,18 @@ export const acceptInvite = async (req, res) => {
 
     // Set user's two-factor preference: request override -> organization default -> leave null
     const preferredTwoFactor = twoFactorMethod || user.organization?.twoFactorMethod || null;
+    let totpSetup = null;
     if (preferredTwoFactor === 'otp' || preferredTwoFactor === 'totp') {
       user.twoFactorMethod = preferredTwoFactor;
-      // Do not auto-enable TOTP here; user must complete setup separately
+
+      // If TOTP is selected at invite acceptance, initialize TOTP secret and return QR
+      if (preferredTwoFactor === 'totp' && !user.totpEnabled) {
+        const { secret, otpauthUrl } = generateTOTPSecret(user.email);
+        const qrCode = await generateQRCode(otpauthUrl);
+        user.totpSecret = secret;
+        totpSetup = { secret, qrCode };
+      }
+
       await user.save();
     }
 
@@ -241,6 +251,20 @@ export const acceptInvite = async (req, res) => {
 
     emitInviteAccepted(invite.invitedBy._id, user.email, user.role);
 
+    // If TOTP selected, require setup/confirmation before issuing tokens
+    if (preferredTwoFactor === 'totp') {
+      return res.status(201).json({
+        success: true,
+        message: 'Account created successfully. Complete TOTP setup to continue.',
+        requiresTwoFactor: true,
+        twoFactorMethod: 'totp',
+        userId: user._id,
+        user: user.toSafeObject(),
+        totp: totpSetup
+      });
+    }
+
+    // Otherwise, proceed to log the user in
     const accessToken = generateAccessToken(user);
     const refreshToken = await createRefreshToken(user._id, req);
 
