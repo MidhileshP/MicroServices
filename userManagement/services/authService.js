@@ -12,12 +12,12 @@ export class AuthService {
     const user = await User.findOne({ email }).populate('organization');
 
     if (!user || !user.isActive) {
-      throw new AuthenticationError('Invalid credentials');
+      throw new AuthenticationError('Invalid Email');
     }
 
     const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
-      throw new AuthenticationError('Invalid credentials');
+      throw new AuthenticationError('Invalid Password');
     }
 
     return user;
