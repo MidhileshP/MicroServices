@@ -4,7 +4,7 @@ import { generateAccessToken } from '../utils/jwt.js';
 import { generateOTP, hashOTP, verifyOTP, getOTPExpiry } from '../utils/otp.js';
 import { generateTOTPSecret, generateQRCode, verifyTOTPToken } from '../utils/totp.js';
 import { sendOTPEmail } from '../utils/notificationClient.js';
-import { AuthenticationError, NotFoundError, ValidationError } from '../utils/errors.js';
+import { AuthenticationError, AuthorizationError, NotFoundError, ValidationError } from '../utils/errors.js';
 import { TOKEN_EXPIRY, TWO_FACTOR_METHODS } from '../config/constants.js';
 
 export class AuthService {
@@ -61,7 +61,31 @@ export class AuthService {
 
   async initiateTOTP(user) {
     if (!user.totpEnabled) {
-      throw new ValidationError('TOTP not set up. Please complete TOTP setup first.');
+      // TOTP is set as method but not properly set up yet
+      // Generate or regenerate the QR code for setup
+      let secret = user.totpSecret;
+
+      if (!secret) {
+        const totpData = generateTOTPSecret(user.email);
+        secret = totpData.secret;
+        user.totpSecret = secret;
+        await user.save();
+      }
+
+      const otpauthUrl = `otpauth://totp/UserManagement:${encodeURIComponent(user.email)}?secret=${secret}&issuer=UserManagement`;
+      const qrCode = await generateQRCode(otpauthUrl);
+
+      return {
+        requiresTwoFactor: true,
+        twoFactorMethod: TWO_FACTOR_METHODS.TOTP,
+        userId: user._id,
+        message: 'TOTP not completed. Please scan the QR code with your authenticator app and verify.',
+        requiresTOTPSetup: true,
+        totp: {
+          secret,
+          qrCode
+        }
+      };
     }
 
     return {
@@ -109,13 +133,19 @@ export class AuthService {
       throw new NotFoundError('User not found');
     }
 
-    if (!user.totpEnabled || !user.totpSecret) {
-      throw new ValidationError('TOTP not enabled');
+    if (!user.totpSecret) {
+      throw new ValidationError('TOTP not initialized');
     }
 
     const isValid = verifyTOTPToken(token, user.totpSecret);
     if (!isValid) {
       throw new ValidationError('Invalid TOTP token');
+    }
+
+    // If TOTP is not enabled yet, enable it after successful verification
+    if (!user.totpEnabled) {
+      user.totpEnabled = true;
+      await user.save();
     }
 
     return user;
@@ -212,6 +242,48 @@ export class AuthService {
   generateTokens(user) {
     const accessToken = generateAccessToken(user);
     return { accessToken };
+  }
+
+  async changeMfaMethod(userId, newMethod) {
+    const user = await User.findById(userId).populate('organization');
+
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    // Only super_admin, site_admin, and client_admin can change their MFA method
+    const allowedRoles = ['super_admin', 'site_admin', 'client_admin'];
+    if (!allowedRoles.includes(user.role)) {
+      throw new AuthorizationError('Only super admin, site admin, and client admin can change their MFA method');
+    }
+
+    // Validate new method
+    if (!Object.values(TWO_FACTOR_METHODS).includes(newMethod)) {
+      throw new ValidationError('Invalid two-factor method');
+    }
+
+    // If switching to TOTP and not already enabled, generate new secret
+    let totpSetup = null;
+    if (newMethod === TWO_FACTOR_METHODS.TOTP) {
+      const { secret, otpauthUrl } = generateTOTPSecret(user.email);
+      const qrCode = await generateQRCode(otpauthUrl);
+      user.totpSecret = secret;
+      user.totpEnabled = false; // Requires confirmation
+      totpSetup = { secret, qrCode };
+    } else if (newMethod === TWO_FACTOR_METHODS.OTP) {
+      // Clear TOTP data when switching to OTP
+      user.totpSecret = null;
+      user.totpEnabled = false;
+    }
+
+    user.twoFactorMethod = newMethod;
+    await user.save();
+
+    return {
+      message: `MFA method changed to ${newMethod}`,
+      totpSetup,
+      requiresTOTPConfirmation: newMethod === TWO_FACTOR_METHODS.TOTP
+    };
   }
 }
 

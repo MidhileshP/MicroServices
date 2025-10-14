@@ -7,7 +7,8 @@ import {
   confirmTOTP,
   refreshTokenHandler,
   logout,
-  getProfile
+  getProfile,
+  changeMfaMethod
 } from '../controllers/authController.js';
 import { authenticate } from '../middleware/auth.js';
 import {
@@ -27,5 +28,6 @@ router.post('/logout', logout);
 router.get('/profile', authenticate, getProfile);
 router.post('/totp/setup', authenticate, setupTOTP);
 router.post('/totp/confirm', sixDigitCodeValidation('token', 'TOTP token'), confirmTOTP);
+router.post('/mfa/change', authenticate, changeMfaMethod);
 
 export default router;

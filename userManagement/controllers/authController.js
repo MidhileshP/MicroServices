@@ -161,6 +161,29 @@ export const getProfile = async (req, res) => {
   }
 };
 
+export const changeMfaMethod = async (req, res) => {
+  try {
+    const { method } = req.body;
+    const result = await authService.changeMfaMethod(req.user._id, method);
+
+    return ok(res, result);
+
+  } catch (error) {
+    logger.error('Change MFA method error', { error: error.message, userId: req.user._id });
+
+    if (error.statusCode === 403) {
+      return unauthorized(res, error.message);
+    }
+    if (error.statusCode === 400) {
+      return badRequest(res, error.message);
+    }
+    if (error.statusCode === 404) {
+      return notFound(res, error.message);
+    }
+    return serverError(res);
+  }
+};
+
 const respondWithTokens = async (res, user, req) => {
   const { accessToken } = authService.generateTokens(user);
   const refreshToken = await authService.createRefreshToken(user._id, req);

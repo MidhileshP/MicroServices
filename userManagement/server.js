@@ -3,11 +3,13 @@ import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import swaggerUi from 'swagger-ui-express';
 import { connectDatabase } from './config/database.js';
 import { initSocketClient } from './utils/socketClient.js';
 import { connectRabbit, disconnectRabbit } from './utils/rabbitmq.js';
 import { logger } from './utils/logger.js';
 import { RATE_LIMITS } from './config/constants.js';
+import { swaggerSpec } from './config/swagger.js';
 import authRoutes from './routes/auth.js';
 import inviteRoutes from './routes/invite.js';
 import organizationRoutes from './routes/organization.js';
@@ -17,7 +19,9 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: false // Disable CSP for Swagger UI
+}));
 
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
@@ -52,6 +56,18 @@ app.get('/health', (req, res) => {
     message: 'User Management Service is running',
     timestamp: new Date().toISOString()
   });
+});
+
+// Swagger API Documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'User Management API Docs'
+}));
+
+// Swagger JSON endpoint
+app.get('/api-docs.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerSpec);
 });
 
 app.use('/api/auth', authRoutes);
@@ -95,6 +111,7 @@ const startServer = async () => {
 
     app.listen(PORT, () => {
       logger.info(`User Management Service running on port ${PORT}`);
+      logger.info(`API Documentation available at http://localhost:${PORT}/api-docs`);
     });
 
   } catch (error) {

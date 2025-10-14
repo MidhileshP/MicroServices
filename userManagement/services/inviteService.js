@@ -199,7 +199,15 @@ export class InviteService {
   }
 
   async setupUserTwoFactor(user, requestedMethod) {
-    const preferredTwoFactor = requestedMethod || user.organization?.twoFactorMethod || null;
+    // For client_user, always use organization's MFA method (ignore requestedMethod)
+    let preferredTwoFactor;
+    if (user.role === ROLES.CLIENT_USER) {
+      preferredTwoFactor = user.organization?.twoFactorMethod || "otp";
+    } else {
+      // For other roles, allow them to choose or fall back to organization's method
+      preferredTwoFactor = requestedMethod || user.organization?.twoFactorMethod || null;
+    }
+
     let totpSetup = null;
 
     if (preferredTwoFactor === TWO_FACTOR_METHODS.OTP || preferredTwoFactor === TWO_FACTOR_METHODS.TOTP) {
