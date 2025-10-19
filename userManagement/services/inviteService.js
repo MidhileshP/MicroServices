@@ -1,6 +1,4 @@
-import User from '../models/User.js';
-import Invite from '../models/Invite.js';
-import Organization from '../models/Organization.js';
+import { userRepo, inviteRepo, organizationRepo } from '../database/repositories/index.js';
 import { canInviteRole, needsOrganization } from '../utils/roleHierarchy.js';
 import { sendInviteEmail } from '../utils/notificationClient.js';
 import { publishEvent } from '../utils/rabbitmq.js';
@@ -17,15 +15,12 @@ export class InviteService {
       throw new AuthorizationError(`You cannot invite users with role: ${role}`);
     }
 
-    const existingUser = await User.findOne({ email: normalizedEmail });
+    const existingUser = await userRepo.findByEmail(normalizedEmail);
     if (existingUser) {
       throw new ConflictError('User with this email already exists');
     }
 
-    const pendingInvite = await Invite.findOne({
-      email: normalizedEmail,
-      status: INVITE_STATUS.PENDING
-    });
+    const pendingInvite = await inviteRepo.findByEmailAndStatus(normalizedEmail, INVITE_STATUS.PENDING);
 
     if (pendingInvite) {
       return await this.handleExistingInvite(pendingInvite, inviter);
@@ -38,11 +33,12 @@ export class InviteService {
     const inviterName = `${inviter.firstName} ${inviter.lastName}`;
 
     if (invite.isExpired()) {
-      const newToken = Invite.generateToken();
+      const InviteModel = (await import('../models/Invite.js')).default;
+      const newToken = InviteModel.generateToken();
       invite.token = newToken;
       invite.expiresAt = new Date(Date.now() + TOKEN_EXPIRY.INVITE);
       invite.status = INVITE_STATUS.PENDING;
-      await invite.save();
+      await inviteRepo.save(invite);
 
       await this.sendInviteNotifications(invite.email, newToken, inviterName, invite.role);
 
@@ -76,10 +72,11 @@ export class InviteService {
       }
     }
 
-    const token = Invite.generateToken();
+    const InviteModel = (await import('../models/Invite.js')).default;
+    const token = InviteModel.generateToken();
     const expiresAt = new Date(Date.now() + TOKEN_EXPIRY.INVITE);
 
-    const invite = await Invite.create({
+    const invite = await inviteRepo.create({
       email,
       role,
       invitedBy: inviter._id,
@@ -121,15 +118,14 @@ export class InviteService {
   }
 
   async acceptInvite(token, firstName, lastName, password, twoFactorMethod) {
-    const invite = await Invite.findOne({ token }).populate('invitedBy');
+    const invite = await inviteRepo.findByToken(token, { populate: 'invitedBy' });
 
     if (!invite) {
       throw new NotFoundError('Invalid invite token');
     }
 
     if (!invite.isValid()) {
-      invite.status = INVITE_STATUS.EXPIRED;
-      await invite.save();
+      await inviteRepo.markAsExpired(invite._id);
       throw new ValidationError('Invite has expired or is no longer valid');
     }
 
@@ -143,10 +139,7 @@ export class InviteService {
 
     const result = await this.setupUserTwoFactor(user, twoFactorMethod);
 
-    invite.status = INVITE_STATUS.ACCEPTED;
-    invite.acceptedAt = new Date();
-    invite.acceptedUserId = user._id;
-    await invite.save();
+    await inviteRepo.markAsAccepted(invite._id, user._id);
 
     return { user, ...result };
   }
@@ -157,12 +150,12 @@ export class InviteService {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '');
 
-    const existingOrg = await Organization.findOne({ slug });
+    const existingOrg = await organizationRepo.findBySlug(slug);
     if (existingOrg) {
       throw new ConflictError('Organization with this name already exists');
     }
 
-    const user = await User.create({
+    const user = await userRepo.create({
       email: invite.email,
       password,
       firstName,
@@ -171,21 +164,19 @@ export class InviteService {
       invitedBy: invite.invitedBy._id
     });
 
-    const organization = await Organization.create({
+    const organization = await organizationRepo.create({
       name: invite.organizationName,
       slug,
       adminUser: user._id,
       twoFactorMethod: TWO_FACTOR_METHODS.OTP
     });
 
-    user.organization = organization._id;
-    await user.save();
-
-    return await User.findById(user._id).populate('organization');
+    await userRepo.updateById(user._id, { organization: organization._id });
+    return await userRepo.findById(user._id, { populate: 'organization' });
   }
 
   async createRegularUser(invite, firstName, lastName, password) {
-    await User.create({
+    await userRepo.create({
       email: invite.email,
       password,
       firstName,
@@ -195,14 +186,19 @@ export class InviteService {
       invitedBy: invite.invitedBy._id
     });
 
-    return await User.findOne({ email: invite.email }).populate('organization');
+    return await userRepo.findByEmail(invite.email, { populate: 'organization' });
   }
 
   async setupUserTwoFactor(user, requestedMethod) {
-    // For client_user, always use organization's MFA method (ignore requestedMethod)
+    // For client_user, ALWAYS use organization's MFA method (ignore requestedMethod completely)
+    // Client users inherit their organization's MFA settings and cannot choose their own
     let preferredTwoFactor;
     if (user.role === ROLES.CLIENT_USER) {
-      preferredTwoFactor = user.organization?.twoFactorMethod || "otp";
+      if (!user.organization) {
+        throw new ValidationError('Client user must belong to an organization');
+      }
+      // Force use of organization's MFA method, ignore any requested method
+      preferredTwoFactor = user.organization.twoFactorMethod || TWO_FACTOR_METHODS.OTP;
     } else {
       // For other roles, allow them to choose or fall back to organization's method
       preferredTwoFactor = requestedMethod || user.organization?.twoFactorMethod || null;
@@ -211,25 +207,34 @@ export class InviteService {
     let totpSetup = null;
 
     if (preferredTwoFactor === TWO_FACTOR_METHODS.OTP || preferredTwoFactor === TWO_FACTOR_METHODS.TOTP) {
-      user.twoFactorMethod = preferredTwoFactor;
+      // Don't save twoFactorMethod on the user document for client_user
+      // They should always reference their organization's method
+      if (user.role !== ROLES.CLIENT_USER) {
+        user.twoFactorMethod = preferredTwoFactor;
+      }
 
       if (preferredTwoFactor === TWO_FACTOR_METHODS.TOTP && !user.totpEnabled) {
         const { secret, otpauthUrl } = generateTOTPSecret(user.email);
         const qrCode = await generateQRCode(otpauthUrl);
-        user.totpSecret = secret;
+        await userRepo.updateById(user._id, { totpSecret: secret });
         totpSetup = { secret, qrCode };
       }
 
-      await user.save();
+      if (user.role !== ROLES.CLIENT_USER) {
+        await userRepo.save(user);
+      }
     }
 
     return { totpSetup, requiresTOTPSetup: preferredTwoFactor === TWO_FACTOR_METHODS.TOTP };
   }
 
   async getInviteDetails(token) {
-    const invite = await Invite.findOne({ token })
-      .populate('invitedBy', 'firstName lastName email')
-      .populate('organization', 'name');
+    const invite = await inviteRepo.findByToken(token, {
+      populate: [
+        { path: 'invitedBy', select: 'firstName lastName email' },
+        { path: 'organization', select: 'name' }
+      ]
+    });
 
     if (!invite) {
       throw new NotFoundError('Invalid invite token');
@@ -257,19 +262,17 @@ export class InviteService {
       query.status = status;
     }
 
-    const invites = await Invite.find(query)
-      .populate('acceptedUserId', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .lean();
+    const invites = await inviteRepo.findByInviter(userId, status ? { status } : {}, {
+      populate: { path: 'acceptedUserId', select: 'firstName lastName email' },
+      sort: { createdAt: -1 },
+      lean: true
+    });
 
     return invites.map(invite => this.formatInviteListItem(invite));
   }
 
   async revokeInvite(inviteId, userId) {
-    const invite = await Invite.findOne({
-      _id: inviteId,
-      invitedBy: userId
-    });
+    const invite = await inviteRepo.findByIdAndInviter(inviteId, userId);
 
     if (!invite) {
       throw new NotFoundError('Invite not found');
@@ -279,8 +282,7 @@ export class InviteService {
       throw new ValidationError('Can only revoke pending invites');
     }
 
-    invite.status = INVITE_STATUS.REVOKED;
-    await invite.save();
+    await inviteRepo.updateStatus(invite._id, INVITE_STATUS.REVOKED);
 
     return { message: 'Invite revoked successfully' };
   }

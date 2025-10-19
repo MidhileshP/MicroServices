@@ -1,5 +1,5 @@
 import { verifyAccessToken } from '../utils/jwt.js';
-import User from '../models/User.js';
+import { userRepo } from '../database/repositories/index.js';
 import { logger } from '../utils/logger.js';
 
 export const authenticate = async (req, res, next) => {
@@ -20,9 +20,7 @@ export const authenticate = async (req, res, next) => {
     const token = authHeader.substring(7);
     const decoded = verifyAccessToken(token);
 
-    const user = await User.findById(decoded.userId)
-      .select('-password')
-      .lean();
+    const user = await userRepo.findById(decoded.userId, { select: '-password', lean: true });
 
     if (!user || !user.isActive) {
       logger.warn('Authentication failed for user', {

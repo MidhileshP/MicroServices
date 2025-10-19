@@ -1,5 +1,4 @@
-import User from '../models/User.js';
-import RefreshToken from '../models/RefreshToken.js';
+import { userRepo, refreshTokenRepo } from '../database/repositories/index.js';
 import { generateAccessToken } from '../utils/jwt.js';
 import { generateOTP, hashOTP, verifyOTP, getOTPExpiry } from '../utils/otp.js';
 import { generateTOTPSecret, generateQRCode, verifyTOTPToken } from '../utils/totp.js';
@@ -9,7 +8,7 @@ import { TOKEN_EXPIRY, TWO_FACTOR_METHODS } from '../config/constants.js';
 
 export class AuthService {
   async authenticate(email, password) {
-    const user = await User.findOne({ email }).populate('organization');
+    const user = await userRepo.findByEmail(email, { populate: 'organization' });
 
     if (!user || !user.isActive) {
       throw new AuthenticationError('Invalid Email');
@@ -45,9 +44,7 @@ export class AuthService {
     const otp = generateOTP();
     const otpHash = await hashOTP(otp);
 
-    user.otpHash = otpHash;
-    user.otpExpiry = getOTPExpiry(10);
-    await user.save();
+    await userRepo.updateOTP(user._id, otpHash, getOTPExpiry(10));
 
     await sendOTPEmail(user.email, otp);
 
@@ -68,8 +65,7 @@ export class AuthService {
       if (!secret) {
         const totpData = generateTOTPSecret(user.email);
         secret = totpData.secret;
-        user.totpSecret = secret;
-        await user.save();
+        await userRepo.updateTOTP(user._id, { totpSecret: secret });
       }
 
       const otpauthUrl = `otpauth://totp/UserManagement:${encodeURIComponent(user.email)}?secret=${secret}&issuer=UserManagement`;
@@ -97,7 +93,7 @@ export class AuthService {
   }
 
   async verifyOTP(userId, otp) {
-    const user = await User.findById(userId);
+    const user = await userRepo.findById(userId, { populate: 'organization' });
 
     if (!user) {
       throw new NotFoundError('User not found');
@@ -108,9 +104,7 @@ export class AuthService {
     }
 
     if (Date.now() > user.otpExpiry) {
-      user.otpHash = null;
-      user.otpExpiry = null;
-      await user.save();
+      await userRepo.clearOTP(user._id);
       throw new ValidationError('OTP expired. Please login again.');
     }
 
@@ -119,15 +113,13 @@ export class AuthService {
       throw new ValidationError('Invalid OTP');
     }
 
-    user.otpHash = null;
-    user.otpExpiry = null;
-    await user.save();
+    await userRepo.clearOTP(user._id);
 
     return user;
   }
 
   async verifyTOTP(userId, token) {
-    const user = await User.findById(userId);
+    const user = await userRepo.findById(userId, { populate: 'organization' });
 
     if (!user) {
       throw new NotFoundError('User not found');
@@ -144,15 +136,14 @@ export class AuthService {
 
     // If TOTP is not enabled yet, enable it after successful verification
     if (!user.totpEnabled) {
-      user.totpEnabled = true;
-      await user.save();
+      await userRepo.updateById(user._id, { totpEnabled: true });
     }
 
     return user;
   }
 
   async setupTOTP(userId, email) {
-    const user = await User.findById(userId);
+    const user = await userRepo.findById(userId);
 
     if (!user) {
       throw new NotFoundError('User not found');
@@ -161,14 +152,13 @@ export class AuthService {
     const { secret, otpauthUrl } = generateTOTPSecret(email);
     const qrCode = await generateQRCode(otpauthUrl);
 
-    user.totpSecret = secret;
-    await user.save();
+    await userRepo.updateTOTP(user._id, { totpSecret: secret });
 
     return { secret, qrCode };
   }
 
   async confirmTOTP(userId, token) {
-    const user = await User.findById(userId);
+    const user = await userRepo.findById(userId);
 
     if (!user || !user.totpSecret) {
       throw new ValidationError('TOTP not initialized');
@@ -179,18 +169,16 @@ export class AuthService {
       throw new ValidationError('Invalid TOTP token');
     }
 
-    user.totpEnabled = true;
-    user.twoFactorMethod = TWO_FACTOR_METHODS.TOTP;
-    await user.save();
+    await userRepo.updateById(user._id, { totpEnabled: true, twoFactorMethod: TWO_FACTOR_METHODS.TOTP });
 
     return user;
   }
 
   async createRefreshToken(userId, req) {
-    const token = RefreshToken.generateToken();
+    const token = (await import('../models/RefreshToken.js')).default.generateToken();
     const expiresAt = new Date(Date.now() + TOKEN_EXPIRY.REFRESH_TOKEN);
 
-    const refreshToken = await RefreshToken.create({
+    const refreshToken = await refreshTokenRepo.create({
       token,
       user: userId,
       expiresAt,
@@ -206,7 +194,7 @@ export class AuthService {
       throw new ValidationError('Refresh token required');
     }
 
-    const storedToken = await RefreshToken.findOne({ token: refreshTokenString }).populate('user');
+    const storedToken = await refreshTokenRepo.findByToken(refreshTokenString, { populate: 'user' });
 
     if (!storedToken || !storedToken.isValid()) {
       throw new AuthenticationError('Invalid or expired refresh token');
@@ -216,7 +204,7 @@ export class AuthService {
   }
 
   async revokeRefreshToken(tokenString, req) {
-    const storedToken = await RefreshToken.findOne({ token: tokenString });
+    const storedToken = await refreshTokenRepo.findByToken(tokenString);
 
     if (storedToken) {
       storedToken.isRevoked = true;
@@ -226,16 +214,13 @@ export class AuthService {
         storedToken.replacedBy = newRefreshToken.token;
       }
 
-      await storedToken.save();
+      await refreshTokenRepo.save(storedToken);
     }
   }
 
   async logout(refreshTokenString) {
     if (refreshTokenString) {
-      await RefreshToken.findOneAndUpdate(
-        { token: refreshTokenString },
-        { isRevoked: true }
-      );
+      await refreshTokenRepo.updateOne({ token: refreshTokenString }, { isRevoked: true });
     }
   }
 
@@ -245,16 +230,21 @@ export class AuthService {
   }
 
   async changeMfaMethod(userId, newMethod) {
-    const user = await User.findById(userId).populate('organization');
+    const user = await userRepo.findById(userId, { populate: 'organization' });
 
     if (!user) {
       throw new NotFoundError('User not found');
     }
 
-    // Only super_admin, site_admin, and client_admin can change their MFA method
-    const allowedRoles = ['super_admin', 'site_admin', 'client_admin'];
+    // Client users must use their organization's MFA method and cannot change it
+    if (user.role === 'client_user') {
+      throw new AuthorizationError('Client users must use their organization\'s MFA method and cannot change it');
+    }
+
+    // Only super_admin, site_admin, operator, and client_admin can change their MFA method
+    const allowedRoles = ['super_admin', 'site_admin', 'operator', 'client_admin'];
     if (!allowedRoles.includes(user.role)) {
-      throw new AuthorizationError('Only super admin, site admin, and client admin can change their MFA method');
+      throw new AuthorizationError('Only super admin, site admin, operator, and client admin can change their MFA method');
     }
 
     // Validate new method
@@ -267,17 +257,12 @@ export class AuthService {
     if (newMethod === TWO_FACTOR_METHODS.TOTP) {
       const { secret, otpauthUrl } = generateTOTPSecret(user.email);
       const qrCode = await generateQRCode(otpauthUrl);
-      user.totpSecret = secret;
-      user.totpEnabled = false; // Requires confirmation
+      await userRepo.updateById(user._id, { totpSecret: secret, totpEnabled: false });
       totpSetup = { secret, qrCode };
     } else if (newMethod === TWO_FACTOR_METHODS.OTP) {
-      // Clear TOTP data when switching to OTP
-      user.totpSecret = null;
-      user.totpEnabled = false;
+      await userRepo.updateById(user._id, { totpSecret: null, totpEnabled: false });
     }
-
-    user.twoFactorMethod = newMethod;
-    await user.save();
+    await userRepo.updateTwoFactorMethod(user._id, newMethod);
 
     return {
       message: `MFA method changed to ${newMethod}`,

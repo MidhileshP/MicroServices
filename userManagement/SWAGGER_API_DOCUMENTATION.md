@@ -92,7 +92,7 @@ Different endpoints require different user roles:
 - Their MFA changes when the `client_admin` updates the organization's `twoFactorMethod`
 
 ### Admin MFA Rules
-- `super_admin`, `site_admin`, and `client_admin` **can** change their MFA method
+- `super_admin`, `site_admin`, `operator`, and `client_admin` **can** change their MFA method
 - Use `POST /api/auth/mfa/change` with `{ "method": "otp" }` or `{ "method": "totp" }`
 - When switching to TOTP, a QR code is provided for authenticator app setup
 

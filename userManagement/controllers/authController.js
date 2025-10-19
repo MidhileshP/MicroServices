@@ -1,4 +1,4 @@
-import User from '../models/User.js';
+import { userRepo } from '../database/repositories/index.js';
 import authService from '../services/authService.js';
 import { ok, badRequest, unauthorized, notFound, serverError } from '../utils/response.js';
 import { logger } from '../utils/logger.js';
@@ -143,9 +143,7 @@ export const logout = async (req, res) => {
 
 export const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id)
-      .populate('organization')
-      .lean();
+  const user = await userRepo.findById(req.user._id, { populate: 'organization', lean: true });
 
     if (!user) {
       return notFound(res, 'User not found');

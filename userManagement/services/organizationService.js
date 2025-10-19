@@ -1,19 +1,19 @@
-import Organization from '../models/Organization.js';
-import User from '../models/User.js';
+import { organizationRepo, userRepo } from '../database/repositories/index.js';
 import { NotFoundError, AuthorizationError, ValidationError } from '../utils/errors.js';
 import { ROLES, TWO_FACTOR_METHODS } from '../config/constants.js';
 
 export class OrganizationService {
   async getOrganization(userId) {
-    const user = await User.findById(userId);
+    const user = await userRepo.findById(userId);
 
     if (!user?.organization) {
       throw new NotFoundError('User does not belong to an organization');
     }
 
-    const organization = await Organization.findById(user.organization)
-      .populate('adminUser', 'firstName lastName email')
-      .lean();
+    const organization = await organizationRepo.findById(user.organization, {
+      populate: { path: 'adminUser', select: 'firstName lastName email' },
+      lean: true
+    });
 
     if (!organization) {
       throw new NotFoundError('Organization not found');
@@ -23,25 +23,24 @@ export class OrganizationService {
   }
 
   async updateOrganization(userId, updates) {
-    const user = await User.findById(userId);
+    const user = await userRepo.findById(userId);
 
     if (user.role !== ROLES.CLIENT_ADMIN) {
-      throw new AuthorizationError('Only organization admin can update settings');
+      throw new AuthorizationError('Only client admins can update organization settings');
     }
 
     if (!user.organization) {
       throw new NotFoundError('User does not belong to an organization');
     }
 
-    const organization = await Organization.findById(user.organization);
+    const organization = await organizationRepo.findById(user.organization);
 
     if (!organization) {
       throw new NotFoundError('Organization not found');
     }
 
-    if (organization.adminUser.toString() !== user._id.toString()) {
-      throw new AuthorizationError('Only organization admin can update settings');
-    }
+    // Allow any client_admin in the organization to update settings
+    // No need to check if they are the original adminUser
 
     if (updates.name) {
       organization.name = updates.name;
@@ -54,24 +53,19 @@ export class OrganizationService {
       organization.twoFactorMethod = updates.twoFactorMethod;
     }
 
-    await organization.save();
+    await organizationRepo.save(organization);
 
     return this.formatOrganizationResponse(organization.toObject());
   }
 
   async getOrganizationMembers(userId) {
-    const user = await User.findById(userId);
+    const user = await userRepo.findById(userId);
 
     if (!user?.organization) {
       throw new NotFoundError('User does not belong to an organization');
     }
 
-    const members = await User.find({
-      organization: user.organization,
-      isActive: true
-    })
-      .select('-password -totpSecret -otpHash')
-      .lean();
+    const members = await userRepo.findByOrganization(user.organization, { isActive: true });
 
     return members.map(member => this.formatMemberResponse(member));
   }
