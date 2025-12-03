@@ -20,7 +20,7 @@ export const authenticate = async (req, res, next) => {
     const token = authHeader.substring(7);
     const decoded = verifyAccessToken(token);
 
-    const user = await userRepo.findById(decoded.userId, { select: '-password', lean: true });
+    const user = await userRepo.findById(decoded.userId, { select: '-password', populate: 'organization', lean: true });
 
     if (!user || !user.isActive) {
       logger.warn('Authentication failed for user', {

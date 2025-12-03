@@ -1,0 +1,266 @@
+{
+  "info": {
+    "name": "Notifications Service API",
+    "description": "Complete API collection for Notifications Service with all endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Email",
+      "item": [
+        {
+          "name": "Send Email (HTML & Text)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"recipient@example.com\",\n  \"subject\": \"Welcome to Our Platform\",\n  \"html\": \"<h1>Welcome!</h1><p>Thank you for joining us.</p>\",\n  \"text\": \"Welcome! Thank you for joining us.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "send"]
+            }
+          }
+        },
+        {
+          "name": "Send Email (HTML Only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"recipient@example.com\",\n  \"subject\": \"HTML Email\",\n  \"html\": \"<h1>HTML Content</h1><p>This is an HTML email.</p>\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "send"]
+            }
+          }
+        },
+        {
+          "name": "Send Email (Text Only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"recipient@example.com\",\n  \"subject\": \"Plain Text Email\",\n  \"text\": \"This is a plain text email.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "send"]
+            }
+          }
+        },
+        {
+          "name": "Send Email with Special Characters",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"recipient@example.com\",\n  \"subject\": \"Email with 特殊文字 and émojis 🎉\",\n  \"html\": \"<h1>Hello 世界!</h1><p>Testing special chars: &lt;tag&gt; & 'quotes'</p>\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "send"]
+            }
+          }
+        },
+        {
+          "name": "Send Invitation Email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"newuser@example.com\",\n  \"subject\": \"You're invited to join our platform\",\n  \"html\": \"<h2>You've been invited!</h2><p>Click the link below to accept:</p><a href='https://app.example.com/invite/TOKEN'>Accept Invitation</a>\",\n  \"text\": \"You've been invited! Visit: https://app.example.com/invite/TOKEN\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "send"]
+            }
+          }
+        },
+        {
+          "name": "Send OTP Email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"user@example.com\",\n  \"subject\": \"Your One-Time Password\",\n  \"html\": \"<h2>Your OTP Code</h2><p>Use this code to login:</p><h1 style='color: blue;'>123456</h1><p>This code expires in 10 minutes.</p>\",\n  \"text\": \"Your OTP code is: 123456. This code expires in 10 minutes.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "send"]
+            }
+          }
+        },
+        {
+          "name": "Send Password Reset Email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"user@example.com\",\n  \"subject\": \"Reset Your Password\",\n  \"html\": \"<h2>Password Reset Request</h2><p>Click the link below to reset your password:</p><a href='https://app.example.com/reset/TOKEN'>Reset Password</a><p>If you didn't request this, please ignore.</p>\",\n  \"text\": \"Reset your password: https://app.example.com/reset/TOKEN\\n\\nIf you didn't request this, please ignore.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "send"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Error Cases",
+      "item": [
+        {
+          "name": "Invalid Email Format",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"invalid-email\",\n  \"subject\": \"Test\",\n  \"html\": \"<p>Test</p>\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "send"]
+            }
+          }
+        },
+        {
+          "name": "Missing Subject",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"recipient@example.com\",\n  \"html\": \"<p>Test</p>\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "send"]
+            }
+          }
+        },
+        {
+          "name": "Missing Content",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"recipient@example.com\",\n  \"subject\": \"Test\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/email/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "email", "send"]
+            }
+          }
+        },
+        {
+          "name": "Non-existent Endpoint",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/nonexistent",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "nonexistent"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
+

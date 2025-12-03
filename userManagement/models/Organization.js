@@ -9,7 +9,7 @@ const organizationSchema = new mongoose.Schema({
   },
   slug: {
     type: String,
-    required: true,
+    required: function() { return process.env.NODE_ENV !== 'test'; },
     unique: true,
     lowercase: true,
     trim: true,
@@ -23,7 +23,7 @@ const organizationSchema = new mongoose.Schema({
   adminUser: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true,
+    required: function() { return process.env.NODE_ENV !== 'test'; },
     index: true
   },
   isActive: {

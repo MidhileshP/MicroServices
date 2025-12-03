@@ -35,12 +35,13 @@ export const sendInviteEmail = async (email, inviteToken, inviterName, role) => 
           Accept Invitation
         </a>
       </p>
+      <p>Or copy and paste this link: <strong>${inviteLink}</strong></p>
       <p>This invitation will expire in 7 days.</p>
       <p>If you didn't expect this invitation, you can safely ignore this email.</p>
     </div>
   `;
 
-  await sendEmail(email, 'You have been invited', html);
+  return await sendEmail(email, 'You have been invited', html);
 };
 
 export const sendOTPEmail = async (email, otp) => {

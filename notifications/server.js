@@ -92,14 +92,18 @@ const io = new Server(httpServer, {
 
 const startServer = async () => {
   try {
-    await connectRedis();
-
-    const pubClient = getRedisPublisher();
-    const subClient = getRedisSubscriber();
-
-    io.adapter(createAdapter(pubClient, subClient));
-
-    logger.info('Socket.IO Redis adapter configured successfully');
+    // Try to connect to Redis (optional)
+    try {
+      await connectRedis();
+      const pubClient = getRedisPublisher();
+      const subClient = getRedisSubscriber();
+      io.adapter(createAdapter(pubClient, subClient));
+      logger.info('Socket.IO Redis adapter configured successfully');
+    } catch (redisError) {
+      logger.warn('Redis connection failed, Socket.IO will work without it (single instance only)', { 
+        error: redisError.message 
+      });
+    }
 
     if (process.env.RABBITMQ_URL) {
       try {

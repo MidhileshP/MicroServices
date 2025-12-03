@@ -1,2 +1,31 @@
-.DS_Store
+# Test artifacts
+coverage/
+test-results.csv
+*.log
+__tests__/*.bak
+
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment
 .env
+.env.local
+.env.test
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+build/
+
+/readme
